@@ -1,0 +1,18 @@
+openapi: 3.1.0
+info: {title: Vehicle Hub API, version: 1.0.0, description: Multi-tenant vehicle management API}
+servers: [{url: /api/v1}]
+security: [{bearerAuth: []}]
+components:
+  securitySchemes: {bearerAuth: {type: http, scheme: bearer}}
+  schemas:
+    Envelope: {type: object, required: [success, message], properties: {success: {type: boolean}, message: {type: string}, data: {}}}
+paths:
+  /auth/register: {post: {security: [], summary: Register a business and owner, responses: {'201': {description: Created}}}}
+  /auth/login: {post: {security: [], summary: Create a Sanctum token, responses: {'200': {description: Authenticated}, '422': {description: Invalid credentials}}}}
+  /me: {get: {summary: Current user and business, responses: {'200': {description: OK}}}}
+  /dashboard: {get: {summary: Business vehicle KPIs, responses: {'200': {description: OK}}}}
+  /vehicles: {get: {summary: Paginated vehicles, parameters: [{name: page, in: query, schema: {type: integer}}, {name: per_page, in: query, schema: {type: integer, maximum: 100}}, {name: search, in: query, schema: {type: string}}], responses: {'200': {description: OK}}}, post: {summary: Create vehicle, responses: {'201': {description: Created}}}}
+  /vehicles/{vehicle}: {parameters: [{name: vehicle, in: path, required: true, schema: {type: integer}}], get: {summary: Vehicle details, responses: {'200': {description: OK}, '404': {description: Not found in tenant}}}, put: {summary: Update vehicle, responses: {'200': {description: Updated}}}, delete: {summary: Soft-delete vehicle, responses: {'200': {description: Archived}}}}
+  /vehicles/{vehicle}/mileage: {parameters: [{name: vehicle, in: path, required: true, schema: {type: integer}}], get: {summary: Mileage history, responses: {'200': {description: OK}}}, post: {summary: Record mileage and update odometer, responses: {'201': {description: Created}, '422': {description: Odometer rollback}}}}
+  /vehicles/{vehicle}/maintenance: {parameters: [{name: vehicle, in: path, required: true, schema: {type: integer}}], get: {summary: Maintenance history, responses: {'200': {description: OK}}}, post: {summary: Add maintenance record, responses: {'201': {description: Created}}}}
+  /reports/expenses: {get: {summary: Expense report (JSON or CSV), responses: {'200': {description: OK}}}}
