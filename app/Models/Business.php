@@ -20,6 +20,7 @@ class Business extends Model
         static::creating(function ($b) {
             $b->subscription_plan ??= 'trial';
             $b->subscription_status ??= 'active';
+            $b->status ??= 'active';
             $b->timezone ??= 'Asia/Manila';
             $b->currency ??= 'PHP';
         });
@@ -54,6 +55,12 @@ class Business extends Model
     {
         return $this->plan_ends_at !== null
             && $this->plan_ends_at->toDateString() < now($this->timezone ?: config('app.timezone'))->toDateString();
+    }
+
+    /** Determine whether platform access has been explicitly disabled. */
+    public function isInactive(): bool
+    {
+        return $this->status === 'inactive';
     }
 
     public function syncPlanStatus(): void

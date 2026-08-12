@@ -40,6 +40,17 @@ class AuthController extends ApiController
             return response()->json(['success' => false, 'message' => 'Invalid credentials.'], 422);
         }
         $u->business?->syncPlanStatus();
+        if ($u->business?->isInactive()) {
+            return response()->json([
+                'success' => false,
+                'code' => 'BUSINESS_INACTIVE',
+                'message' => 'This business account has been disabled. Please contact support for assistance.',
+                'data' => [
+                    'user' => $this->withAuthorization($u),
+                    'token' => $u->createToken('support-access')->plainTextToken,
+                ],
+            ], 403);
+        }
         if ($u->business?->planHasEnded()) {
             return response()->json([
                 'success' => false,
@@ -65,6 +76,15 @@ class AuthController extends ApiController
     public function me(Request $r)
     {
         return $this->ok($this->withAuthorization($r->user()));
+    }
+
+    /** Return current account access state even when the tenant is restricted. */
+    public function accessStatus(Request $request)
+    {
+        $user = $request->user();
+        $user->business?->syncPlanStatus();
+
+        return $this->ok($this->withAuthorization($user->fresh()));
     }
 
     public function updateProfile(Request $r)
