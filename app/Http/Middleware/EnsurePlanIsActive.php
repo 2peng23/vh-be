@@ -10,12 +10,22 @@ class EnsurePlanIsActive
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if ($request->is('api/v1/support/*') || $request->is('api/v1/superadmin/support/*')) {
+        $isPlanPurchaseRequest = $request->isMethod('GET')
+            && ($request->is('api/v1/plan-offerings') || $request->is('api/v1/payment-methods'));
+
+        if ($request->is('api/v1/support/*') || $request->is('api/v1/superadmin/support/*') || $request->is('api/v1/plan-transactions*') || $isPlanPurchaseRequest) {
             return $next($request);
         }
         $user = $request->user();
         if ($user?->business_id) {
             $user->business?->syncPlanStatus();
+        }
+        if ($user?->business?->isInactive()) {
+            return response()->json([
+                'success' => false,
+                'code' => 'BUSINESS_INACTIVE',
+                'message' => 'This business account has been disabled. Please contact support for assistance.',
+            ], 403);
         }
         if ($user?->business_id && $user->business?->planHasEnded()) {
             return response()->json([

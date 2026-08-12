@@ -3,22 +3,24 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Models\Business;
+use App\Models\PlanTransaction;
+use App\Models\PaymentMethod;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Support\PermissionCatalog;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\Rules\Password;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
 
 class SuperAdminController extends ApiController
 {
+    /** Return platform-level totals after synchronizing expired plans. */
     public function dashboard(Request $request)
     {
-        $this->authorizeSuperAdmin($request);
         Business::syncEndedPlanStatuses();
 
         return $this->ok([
@@ -30,9 +32,9 @@ class SuperAdminController extends ApiController
         ]);
     }
 
+    /** Return a searchable page of tenant businesses and their usage totals. */
     public function businesses(Request $request)
     {
-        $this->authorizeSuperAdmin($request);
         Business::syncEndedPlanStatuses();
         $query = Business::query()->with(['users' => fn ($q) => $q->where('role', 'owner')->select('id', 'business_id', 'name', 'email')])->withCount(['users', 'vehicles']);
         if ($request->filled('search')) {
@@ -43,9 +45,9 @@ class SuperAdminController extends ApiController
         return $this->paginated($query->latest()->paginate(min((int) $request->input('per_page', 20), 100)));
     }
 
+    /** Create a tenant business and its first owner in one transaction. */
     public function storeOwner(Request $request)
     {
-        $this->authorizeSuperAdmin($request);
         $data = $request->validate([
             'business_name' => 'required|string|max:150',
             'owner_name' => 'required|string|max:150',
@@ -94,13 +96,14 @@ class SuperAdminController extends ApiController
         ], 'Owner account created.', 201);
     }
 
+    /** Update plan and identity fields controlled by the platform administrator. */
     public function updateBusiness(Request $request, Business $business)
     {
-        $this->authorizeSuperAdmin($request);
         $data = $request->validate([
             'name' => 'sometimes|required|string|max:150',
             'email' => 'sometimes|required|email|max:255',
             'subscription_plan' => ['sometimes', 'required', Rule::in(['trial', 'starter', 'business', 'enterprise'])],
+            'status' => ['sometimes', 'required', Rule::in(['active', 'inactive'])],
             'plan_ends_at' => 'sometimes|nullable|date',
             'vehicle_limit_override' => 'sometimes|nullable|integer|min:1|max:100000',
         ]);
@@ -108,13 +111,129 @@ class SuperAdminController extends ApiController
             $data['subscription_status'] = Business::statusForPlanEnd($data['plan_ends_at']);
         }
         $business->update($data);
+        if (($data['status'] ?? null) === 'inactive') {
+            $business->users()->each(fn (User $user) => $user->tokens()->delete());
+        }
 
         return $this->ok($business->fresh(), 'Business updated.');
     }
 
+    /** Return a searchable page of recorded plan purchases and renewals. */
+    public function transactions(Request $request)
+    {
+        $query = PlanTransaction::query()->with(['business:id,name,email', 'creator:id,name', 'selectedPaymentMethod:id,name,account_name,account_number']);
+
+        if ($request->filled('search')) {
+            $search = $request->string('search')->trim()->value();
+            $query->where(fn ($transaction) => $transaction
+                ->where('reference', 'like', "%{$search}%")
+                ->orWhere('plan', 'like', "%{$search}%")
+                ->orWhereHas('business', fn ($business) => $business
+                    ->where('name', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%")));
+        }
+
+        if ($request->filled('plan')) {
+            $query->where('plan', $request->string('plan')->trim()->value());
+        }
+
+        if ($request->filled('payment_status')) {
+            $query->where('payment_status', $request->string('payment_status')->trim()->value());
+        }
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->string('status')->trim()->value());
+        }
+
+        if ($request->filled('payment_method')) {
+            $paymentMethod = $request->string('payment_method')->trim()->value();
+            $query->where(fn ($transaction) => $transaction
+                ->where('payment_method', $paymentMethod)
+                ->orWhereHas('selectedPaymentMethod', fn ($method) => $method->where('name', $paymentMethod)));
+        }
+
+        if ($request->filled('date_from')) {
+            $query->whereDate('created_at', '>=', $request->date('date_from'));
+        }
+
+        if ($request->filled('date_to')) {
+            $query->whereDate('created_at', '<=', $request->date('date_to'));
+        }
+
+        return $this->paginated($query->latest('paid_at')->latest('id')->paginate(min((int) $request->input('per_page', 20), 100)));
+    }
+
+    /** Record a plan purchase and activate the purchased period atomically. */
+    public function storeTransaction(Request $request)
+    {
+        $data = $request->validate([
+            'business_id' => ['required', 'integer', Rule::exists('businesses', 'id')],
+            'plan' => ['required', Rule::in(['trial', 'starter', 'business', 'enterprise'])],
+            'amount' => 'required|numeric|min:0|max:9999999999.99',
+            'payment_method_id' => ['required', 'integer', Rule::exists('payment_methods', 'id')],
+            'paid_at' => 'required|date',
+            'starts_at' => 'required|date',
+            'ends_at' => 'required|date|after_or_equal:starts_at',
+            'notes' => 'nullable|string|max:2000',
+        ]);
+
+        $transaction = DB::transaction(function () use ($data, $request) {
+            $business = Business::findOrFail($data['business_id']);
+            $paymentMethod = PaymentMethod::findOrFail($data['payment_method_id']);
+            $reference = $this->transactionReference($business, $data['paid_at']);
+            $transaction = PlanTransaction::create([
+                ...$data,
+                'created_by' => $request->user()->id,
+                'currency' => 'PHP',
+                'payment_method' => $paymentMethod->name,
+                'reference' => $reference,
+                'status' => 'processing',
+            ]);
+
+            return $transaction;
+        });
+
+        return $this->ok($transaction->load(['business:id,name,email', 'creator:id,name', 'selectedPaymentMethod:id,name,account_name,account_number']), 'Plan transaction created.', 201);
+    }
+
+    /** Change transaction status and activate the plan only after completion. */
+    public function updateTransactionStatus(Request $request, PlanTransaction $planTransaction)
+    {
+        $data = $request->validate(['status' => ['required', Rule::in(['processing', 'completed', 'failed'])]]);
+        DB::transaction(function () use ($planTransaction, $data) {
+            if ($data['status'] === 'completed') {
+                $startsAt = now()->startOfDay();
+                $endsAt = $startsAt->copy()->addMonthsNoOverflow(max(1, (int) $planTransaction->duration_months));
+                $planTransaction->update(['status' => 'completed', 'starts_at' => $startsAt, 'ends_at' => $endsAt]);
+                $planTransaction->business()->update([
+                    'subscription_plan' => $planTransaction->plan,
+                    'subscription_status' => 'active',
+                    'plan_started_at' => $startsAt,
+                    'plan_ends_at' => $endsAt,
+                ]);
+            } else {
+                $planTransaction->update(['status' => $data['status']]);
+            }
+        });
+
+        return $this->ok($planTransaction->fresh()->load(['business:id,name,email', 'creator:id,name', 'selectedPaymentMethod:id,name,account_name,account_number']), 'Transaction status updated.');
+    }
+
+    /** Generate a readable unique reference from business, date, and random code. */
+    private function transactionReference(Business $business, string $paidAt): string
+    {
+        $prefix = Str::upper(Str::slug($business->name, '-')) ?: 'BUSINESS';
+        $date = date('Ymd', strtotime($paidAt));
+        do {
+            $reference = "{$prefix}-{$date}-".Str::upper(Str::random(8));
+        } while (PlanTransaction::where('reference', $reference)->exists());
+
+        return $reference;
+    }
+
+    /** Return owner rows with nested staff for the grouped user table. */
     public function users(Request $request)
     {
-        $this->authorizeSuperAdmin($request);
         $query = User::withTrashed()
             ->with([
                 'business:id,name,subscription_plan,subscription_status,vehicle_limit_override,plan_ends_at',
@@ -144,9 +263,9 @@ class SuperAdminController extends ApiController
         return $this->paginated($query->latest()->paginate(min((int) $request->input('per_page', 20), 100)));
     }
 
+    /** Update a tenant user and revoke sessions when the account is disabled. */
     public function updateUser(Request $request, User $user)
     {
-        $this->authorizeSuperAdmin($request);
         abort_if($user->isSuperAdmin(), 403);
         $data = $request->validate([
             'name' => 'sometimes|required|string|max:150',
@@ -171,18 +290,17 @@ class SuperAdminController extends ApiController
         return $this->ok($user->fresh()->load('business:id,name'), 'User updated.');
     }
 
+    /** Return the permission matrix definition consumed by the frontend editor. */
     public function permissions(Request $request)
     {
-        $this->authorizeSuperAdmin($request);
-
         return $this->ok([
             'modules' => PermissionCatalog::MODULES,
         ]);
     }
 
+    /** Search tenant users that can receive direct permission assignments. */
     public function permissionUsers(Request $request)
     {
-        $this->authorizeSuperAdmin($request);
         $query = User::withTrashed()
             ->with(['business:id,name', 'permissions'])
             ->whereNotNull('business_id');
@@ -202,17 +320,17 @@ class SuperAdminController extends ApiController
         return $this->paginated($paginator);
     }
 
+    /** Return one tenant user's direct permission assignment. */
     public function permissionUser(Request $request, User $user)
     {
-        $this->authorizeSuperAdmin($request);
         abort_if($user->isSuperAdmin() || ! $user->business_id, 404);
 
         return $this->ok($this->permissionUserData($user->load('business:id,name')));
     }
 
+    /** Replace the selected user's direct permissions. */
     public function updateUserPermissions(Request $request, User $user)
     {
-        $this->authorizeSuperAdmin($request);
         abort_if($user->isSuperAdmin() || ! $user->business_id, 403);
         $data = $request->validate([
             'permissions' => 'present|array',
@@ -227,9 +345,9 @@ class SuperAdminController extends ApiController
         ], 'User permissions updated.');
     }
 
+    /** Replace direct permissions for every tenant user with the selected role. */
     public function applyPermissionsToRole(Request $request)
     {
-        $this->authorizeSuperAdmin($request);
         $data = $request->validate([
             'role' => ['required', Rule::in(PermissionCatalog::TENANT_ROLES)],
             'permissions' => 'present|array',
@@ -252,9 +370,9 @@ class SuperAdminController extends ApiController
         ], "Permissions applied to {$users->count()} {$data['role']} users.");
     }
 
+    /** Issue a short-lived user token for Super Admin dashboard impersonation. */
     public function impersonate(Request $request, User $user)
     {
-        $this->authorizeSuperAdmin($request);
         abort_if($user->isSuperAdmin() || ! $user->business_id || $user->status !== 'active', 403);
         $user->load('business');
         $permissions = $user->getAllPermissions()->pluck('name')->values();
@@ -267,11 +385,7 @@ class SuperAdminController extends ApiController
         ], "Viewing dashboard as {$user->name}.");
     }
 
-    private function authorizeSuperAdmin(Request $request): void
-    {
-        abort_unless($request->user()->isSuperAdmin(), 403);
-    }
-
+    /** Normalize the user payload used by permission search and detail endpoints. */
     private function permissionUserData(User $user): array
     {
         return [

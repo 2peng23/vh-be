@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Business;
 use App\Models\MaintenanceSchedule;
+use App\Models\SupportMessage;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleExpense;
@@ -99,6 +100,33 @@ class VehicleApiTest extends TestCase
         Sanctum::actingAs($staff);
         $this->getJson('/api/v1/support/messages')->assertForbidden();
         $this->postJson('/api/v1/support/messages', ['message' => 'Staff should not send this.'])->assertForbidden();
+    }
+
+    public function test_inactive_business_blocks_owner_and_staff_with_a_distinct_response(): void
+    {
+        $owner = $this->user('inactive-business');
+        $staff = User::create([
+            'business_id' => $owner->business_id,
+            'name' => 'Inactive Staff',
+            'email' => 'inactive-staff@example.com',
+            'password' => 'password',
+            'role' => 'staff',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $owner->business->update(['status' => 'inactive']);
+
+        foreach ([$owner, $staff] as $user) {
+            $this->postJson('/api/v1/auth/login', [
+                'email' => $user->email,
+                'password' => 'password',
+            ])->assertForbidden()->assertJsonPath('code', 'BUSINESS_INACTIVE');
+        }
+
+        Sanctum::actingAs($owner);
+        $this->getJson('/api/v1/me')
+            ->assertForbidden()
+            ->assertJsonPath('code', 'BUSINESS_INACTIVE');
     }
 
     public function test_registration_creates_business_owner_trial_and_token(): void
@@ -509,6 +537,31 @@ class VehicleApiTest extends TestCase
         ])->assertOk()->assertJsonPath('data.subscription_status', 'active');
     }
 
+    public function test_super_admin_can_disable_and_reactivate_a_business(): void
+    {
+        $owner = $this->user('business-access');
+        $owner->createToken('existing-session');
+        $superAdmin = User::create([
+            'name' => 'Platform Admin',
+            'email' => 'business-access-admin@example.com',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        Sanctum::actingAs($superAdmin);
+
+        $this->putJson('/api/v1/superadmin/businesses/'.$owner->business_id, [
+            'status' => 'inactive',
+        ])->assertOk()
+            ->assertJsonPath('data.status', 'inactive');
+        $this->assertDatabaseCount('personal_access_tokens', 0);
+
+        $this->putJson('/api/v1/superadmin/businesses/'.$owner->business_id, [
+            'status' => 'active',
+        ])->assertOk()
+            ->assertJsonPath('data.status', 'active');
+    }
+
     public function test_business_users_and_super_admin_share_a_support_conversation(): void
     {
         $owner = $this->user('support-business');
@@ -590,7 +643,7 @@ class VehicleApiTest extends TestCase
     {
         $owner = $this->user('support-history');
         foreach (range(1, 15) as $index) {
-            \App\Models\SupportMessage::create([
+            SupportMessage::create([
                 'business_id' => $owner->business_id,
                 'user_id' => $owner->id,
                 'sender_type' => 'tenant',
@@ -625,7 +678,7 @@ class VehicleApiTest extends TestCase
             ->assertJsonPath('data.attachment_name', 'renewal.pdf')
             ->assertJsonMissingPath('data.attachment_path');
         $messageId = $response->json('data.id');
-        $stored = \App\Models\SupportMessage::findOrFail($messageId);
+        $stored = SupportMessage::findOrFail($messageId);
         Storage::disk('local')->assertExists($stored->getRawOriginal('attachment_path'));
         $this->get('/api/v1/support/attachments/'.$messageId)->assertOk();
 
@@ -663,6 +716,17 @@ class VehicleApiTest extends TestCase
             'title' => 'Follow up',
             'message' => 'We are following up on your support request.',
         ]);
+
+        $templateId = $this->postJson('/api/v1/superadmin/support/templates', [
+            'title' => 'Editable reply',
+            'message' => 'Original message.',
+        ])->assertCreated()->json('data.id');
+        $this->putJson('/api/v1/superadmin/support/templates/'.$templateId, [
+            'title' => 'Updated reply',
+            'message' => 'Updated message.',
+        ])->assertOk()
+            ->assertJsonPath('data.title', 'Updated reply')
+            ->assertJsonPath('data.message', 'Updated message.');
 
         $owner = $this->user('template-owner');
         Sanctum::actingAs($owner);

@@ -7,6 +7,9 @@ use App\Http\Controllers\Api\V1\MaintenanceController;
 use App\Http\Controllers\Api\V1\MileageController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\OperationsController;
+use App\Http\Controllers\Api\V1\PaymentMethodController;
+use App\Http\Controllers\Api\V1\PlanTransactionController;
+use App\Http\Controllers\Api\V1\SubscriptionPlanOfferingController;
 use App\Http\Controllers\Api\V1\ReportController;
 use App\Http\Controllers\Api\V1\StaffController;
 use App\Http\Controllers\Api\V1\SuperAdminController;
@@ -39,16 +42,24 @@ Route::prefix('v1')->group(function () {
         Route::post('messages', [SupportController::class, 'guestSend']);
         Route::get('attachments/{supportMessage}', [SupportController::class, 'guestDownload']);
     });
+    // Keep restricted account screens synchronized without granting access to tenant data.
+    Route::get('access-status', [AuthController::class, 'accessStatus'])->middleware('auth:sanctum');
     Route::middleware(['auth:sanctum', 'plan.active'])->group(function () {
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
         Route::put('me', [AuthController::class, 'updateProfile']);
         Route::put('me/password', [AuthController::class, 'changePassword']);
-        Route::prefix('superadmin')->group(function () {
+        Route::prefix('superadmin')->middleware('superadmin')->group(function () {
             Route::get('dashboard', [SuperAdminController::class, 'dashboard']);
             Route::get('businesses', [SuperAdminController::class, 'businesses']);
             Route::post('owners', [SuperAdminController::class, 'storeOwner']);
             Route::put('businesses/{business}', [SuperAdminController::class, 'updateBusiness']);
+            Route::get('transactions', [SuperAdminController::class, 'transactions']);
+            Route::post('transactions', [SuperAdminController::class, 'storeTransaction']);
+            Route::put('transactions/{planTransaction}/status', [SuperAdminController::class, 'updateTransactionStatus']);
+            Route::apiResource('plan-offerings', SubscriptionPlanOfferingController::class)->only(['index', 'store', 'update']);
+            Route::apiResource('payment-methods', PaymentMethodController::class)->only(['index', 'store', 'update', 'destroy']);
+            Route::get('payment-methods/{paymentMethod}/qr', [PaymentMethodController::class, 'qr']);
             Route::get('users', [SuperAdminController::class, 'users']);
             Route::put('users/{user}', [SuperAdminController::class, 'updateUser']);
             Route::get('permissions', [SuperAdminController::class, 'permissions']);
@@ -64,11 +75,19 @@ Route::prefix('v1')->group(function () {
             Route::post('support/guests/{guestSupportConversation}', [SupportController::class, 'adminGuestSend']);
             Route::get('support/templates', [SupportController::class, 'templates']);
             Route::post('support/templates', [SupportController::class, 'storeTemplate']);
+            Route::put('support/templates/{supportTemplate}', [SupportController::class, 'updateTemplate']);
         });
         Route::get('support/messages', [SupportController::class, 'messages']);
         Route::post('support/messages', [SupportController::class, 'send']);
         Route::get('support/unread-count', [SupportController::class, 'unreadCount']);
         Route::get('support/attachments/{supportMessage}', [SupportController::class, 'download']);
+        Route::get('plan-transactions', [PlanTransactionController::class, 'index']);
+        Route::post('plan-transactions', [PlanTransactionController::class, 'store']);
+        Route::get('plan-offerings', [SubscriptionPlanOfferingController::class, 'index']);
+        Route::get('payment-methods', [PaymentMethodController::class, 'index']);
+        Route::get('plan-transactions/{planTransaction}', [PlanTransactionController::class, 'show']);
+        Route::put('plan-transactions/{planTransaction}/mark-paid', [PlanTransactionController::class, 'markAsPaid']);
+        Route::get('plan-transactions/{planTransaction}/payment-qr', [PlanTransactionController::class, 'paymentQr']);
         Route::get('staff', [StaffController::class, 'index'])->middleware('permission:staff.view');
         Route::post('staff', [StaffController::class, 'store'])->middleware('permission:staff.create');
         Route::put('staff/{staff}', [StaffController::class, 'update'])->middleware('permission:staff.update');

@@ -11,6 +11,6 @@ class BusinessFactory extends Factory
     {
         $name = fake()->unique()->company();
 
-        return ['name' => $name, 'slug' => Str::slug($name).'-'.fake()->unique()->numberBetween(1, 9999), 'email' => fake()->unique()->companyEmail(), 'timezone' => 'Asia/Manila', 'currency' => 'PHP', 'subscription_plan' => 'trial', 'subscription_status' => 'active', 'plan_started_at' => now(), 'plan_ends_at' => now()->addDays(30)];
+        return ['name' => $name, 'slug' => Str::slug($name).'-'.fake()->unique()->numberBetween(1, 9999), 'email' => fake()->unique()->companyEmail(), 'timezone' => 'Asia/Manila', 'currency' => 'PHP', 'subscription_plan' => 'trial', 'subscription_status' => 'active', 'status' => 'active', 'plan_started_at' => now(), 'plan_ends_at' => now()->addDays(30)];
     }
 }
