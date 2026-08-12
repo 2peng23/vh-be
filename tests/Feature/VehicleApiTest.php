@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Business;
 use App\Models\MaintenanceSchedule;
+use App\Models\SubscriptionPlanOffering;
 use App\Models\SupportMessage;
 use App\Models\User;
 use App\Models\Vehicle;
@@ -507,6 +508,60 @@ class VehicleApiTest extends TestCase
         ]);
         $owner = User::where('email', 'owner@north.test')->firstOrFail();
         $this->assertTrue($owner->can('vehicles.create'));
+    }
+
+    public function test_updating_a_plan_propagates_its_vehicle_limit_and_preserves_higher_overrides(): void
+    {
+        $superAdmin = User::create([
+            'business_id' => null,
+            'name' => 'Platform Admin',
+            'email' => 'plan-offering-admin@vehiclehub.test',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        $inherited = Business::create([
+            'name' => 'Inherited Limit',
+            'slug' => 'inherited-limit',
+            'email' => 'inherited-limit@example.com',
+            'subscription_plan' => 'starter',
+        ]);
+        $higherOverride = Business::create([
+            'name' => 'Higher Override',
+            'slug' => 'higher-override',
+            'email' => 'higher-override@example.com',
+            'subscription_plan' => 'starter',
+            'vehicle_limit_override' => 20,
+        ]);
+        $lowerOverride = Business::create([
+            'name' => 'Lower Override',
+            'slug' => 'lower-override',
+            'email' => 'lower-override@example.com',
+            'subscription_plan' => 'starter',
+            'vehicle_limit_override' => 4,
+        ]);
+        $offering = SubscriptionPlanOffering::where('plan', 'starter')
+            ->where('duration_months', 1)
+            ->firstOrFail();
+        Sanctum::actingAs($superAdmin);
+
+        $this->putJson("/api/v1/superadmin/plan-offerings/{$offering->id}", [
+            'plan' => 'starter',
+            'name' => 'Starter',
+            'duration_months' => 1,
+            'price' => 1500,
+            'vehicle_limit' => 10,
+            'details' => 'Complete vehicle management for small fleets.',
+            'is_active' => true,
+        ])->assertOk()
+            ->assertJsonPath('data.vehicle_limit', 10);
+
+        $this->assertSame(10, SubscriptionPlanOffering::where('plan', 'starter')->distinct()->value('vehicle_limit'));
+        $this->assertNull($inherited->fresh()->vehicle_limit_override);
+        $this->assertSame(20, $higherOverride->fresh()->vehicle_limit_override);
+        $this->assertNull($lowerOverride->fresh()->vehicle_limit_override);
+        $this->assertSame(10, \App\Support\SubscriptionPlans::vehicleLimit($inherited->fresh()));
+        $this->assertSame(10, \App\Support\SubscriptionPlans::vehicleLimit($lowerOverride->fresh()));
     }
 
     public function test_business_status_is_derived_from_the_plan_end_date(): void

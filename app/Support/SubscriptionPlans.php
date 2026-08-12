@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\Business;
+use App\Models\SubscriptionPlanOffering;
 
 final class SubscriptionPlans
 {
@@ -26,7 +27,24 @@ final class SubscriptionPlans
             return (int) $business->vehicle_limit_override;
         }
 
-        return self::VEHICLE_LIMITS[self::tier($business)];
+        return self::defaultVehicleLimit(self::tier($business));
+    }
+
+    /** Return the administrator-configured tier limit with a safe seeded fallback. */
+    public static function defaultVehicleLimit(string $tier): int
+    {
+        if ($tier === 'trial') {
+            return self::VEHICLE_LIMITS['trial'];
+        }
+
+        $configuredLimit = SubscriptionPlanOffering::query()
+            ->where('plan', $tier)
+            ->orderBy('duration_months')
+            ->value('vehicle_limit');
+
+        return $configuredLimit !== null
+            ? (int) $configuredLimit
+            : self::VEHICLE_LIMITS[$tier];
     }
 
     public static function summary(Business $business): array
@@ -42,7 +60,7 @@ final class SubscriptionPlans
             'label' => ucfirst($tier),
             'status' => $business->subscription_status,
             'vehicle_limit' => $limit,
-            'default_vehicle_limit' => self::VEHICLE_LIMITS[$tier],
+            'default_vehicle_limit' => self::defaultVehicleLimit($tier),
             'has_custom_vehicle_limit' => $business->vehicle_limit_override !== null,
             'vehicle_count' => $count,
             'vehicles_remaining' => max(0, $limit - $count),
