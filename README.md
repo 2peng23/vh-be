@@ -28,6 +28,8 @@ API response envelopes consistently return `success`, `message`, and `data`; lis
 
 See [docs/openapi.yaml](docs/openapi.yaml) for the OpenAPI entry point.
 
+The Docker image serves Laravel through Apache with `public/` as the document root. Copy `.env.docker.example` into a protected deployment secret and replace every placeholder. Do not use the local `.env.docker` values in production.
+
 ## Vue web application
 
 The Vue 3 + TypeScript frontend is the sibling application at `../vehicle-hub-fe/`. See `../vehicle-hub-fe/README.md` for its setup and development commands.
