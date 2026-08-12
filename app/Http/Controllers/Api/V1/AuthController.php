@@ -21,7 +21,7 @@ class AuthController extends ApiController
             $slug = $base;
             while (Business::where('slug', $slug)->exists()) {
                 $slug = $base.'-'.Str::lower(Str::random(5));
-            }$b = Business::create(['name' => $v['business_name'], 'slug' => $slug, 'email' => $v['email'], 'phone' => $v['phone'] ?? null, 'industry' => $v['industry'] ?? null, 'trial_started_at' => now(), 'trial_ends_at' => now()->addDays(30)]);
+            }$b = Business::create(['name' => $v['business_name'], 'slug' => $slug, 'email' => $v['email'], 'phone' => $v['phone'] ?? null, 'industry' => $v['industry'] ?? null, 'plan_started_at' => now(), 'plan_ends_at' => now()->addDays(30)]);
             $u = $b->users()->create(['name' => $v['owner_name'], 'email' => $v['email'], 'phone' => $v['phone'] ?? null, 'password' => $v['password'], 'role' => 'owner']);
             $u->syncAuthorizationRole();
 
@@ -38,6 +38,18 @@ class AuthController extends ApiController
         $u = User::where('email', $v['email'])->first();
         if (! $u || ! Hash::check($v['password'], $u->password) || $u->status !== 'active') {
             return response()->json(['success' => false, 'message' => 'Invalid credentials.'], 422);
+        }
+        $u->business?->syncPlanStatus();
+        if ($u->business?->planHasEnded()) {
+            return response()->json([
+                'success' => false,
+                'code' => 'PLAN_ENDED',
+                'message' => 'Your plan has ended. Please contact support to reactivate your account.',
+                'data' => [
+                    'user' => $this->withAuthorization($u),
+                    'token' => $u->createToken('support-access')->plainTextToken,
+                ],
+            ], 403);
         }
 
         return $this->ok(['user' => $this->withAuthorization($u), 'token' => $u->createToken($v['device_name'] ?? 'api')->plainTextToken], 'Logged in.');

@@ -18,7 +18,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->call(SuperAdminSeeder::class);
         for ($b = 1; $b <= 3; $b++) {
-            $business = Business::create(['name' => "Demo Vehicle $b", 'slug' => "demo-vehicle-$b", 'email' => "vehicle$b@example.com", 'trial_started_at' => now(), 'trial_ends_at' => now()->addDays(30), 'subscription_plan' => 'business']);
+            $business = Business::create(['name' => "Demo Vehicle $b", 'slug' => "demo-vehicle-$b", 'email' => "vehicle$b@example.com", 'plan_started_at' => now(), 'plan_ends_at' => now()->addDays(30), 'subscription_plan' => 'business']);
             User::create(['business_id' => $business->id, 'name' => "Demo Owner $b", 'email' => "owner$b@vh.test", 'password' => Hash::make('password'), 'role' => 'owner', 'email_verified_at' => now()]);
             $staff = collect();
             for ($s = 1; $s <= 2; $s++) {

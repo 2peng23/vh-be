@@ -20,10 +20,10 @@ return new class extends Migration
             $t->string('timezone')->default('Asia/Manila');
             $t->string('currency', 3)->default('PHP');
             $t->string('mileage_unit')->default('km');
-            $t->string('subscription_plan')->default('starter');
-            $t->string('subscription_status')->default('trial');
-            $t->timestamp('trial_started_at')->nullable();
-            $t->timestamp('trial_ends_at')->nullable();
+            $t->string('subscription_plan')->default('trial');
+            $t->string('subscription_status')->default('active');
+            $t->timestamp('plan_started_at')->nullable();
+            $t->timestamp('plan_ends_at')->nullable();
             $t->json('settings')->nullable();
             $t->timestamps();
         });

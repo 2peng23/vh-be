@@ -56,8 +56,18 @@ class VehicleResourceController extends ApiController
     public function rootIndex(Request $r, string $resource)
     {
         $this->authorizeAction($r, $resource, 'view');
+        $query = $this->class($resource)::query();
+        if ($resource === 'drivers' && $r->filled('search')) {
+            $search = $r->string('search')->trim()->value();
+            $query->where(fn ($driver) => $driver
+                ->where('name', 'like', "%{$search}%")
+                ->orWhere('employee_number', 'like', "%{$search}%")
+                ->orWhere('email', 'like', "%{$search}%")
+                ->orWhere('phone', 'like', "%{$search}%")
+                ->orWhere('license_number', 'like', "%{$search}%"));
+        }
 
-        return $this->paginated($this->class($resource)::latest()->paginate(min((int) $r->input('per_page', 20), 100)));
+        return $this->paginated($query->latest()->paginate(min((int) $r->input('per_page', 20), 100)));
     }
 
     public function rootStore(Request $r, string $resource)

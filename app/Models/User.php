@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\UserRole;
+use App\Support\PermissionCatalog;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,6 +13,7 @@ use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Schema;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Models\Role;
+use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Traits\HasRoles;
 
 class User extends Authenticatable implements MustVerifyEmail
@@ -55,6 +57,13 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         if (Role::where('name', $this->role->value)->where('guard_name', 'web')->exists()) {
             $this->syncRoles($this->role->value);
+        }
+        if (! $this->isSuperAdmin() && Schema::hasTable('permissions') && $this->permissions()->doesntExist()) {
+            $defaults = PermissionCatalog::defaults($this->role->value);
+            $permissions = Permission::whereIn('name', $defaults)->get();
+            if ($permissions->count() === count($defaults)) {
+                $this->syncPermissions($permissions);
+            }
         }
     }
 }

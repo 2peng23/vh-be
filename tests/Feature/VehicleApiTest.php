@@ -12,7 +12,6 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
-use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 class VehicleApiTest extends TestCase
@@ -37,7 +36,7 @@ class VehicleApiTest extends TestCase
         return Vehicle::withoutGlobalScopes()->create(['business_id' => $u->business_id, 'plate_number' => $plate, 'brand' => 'Toyota', 'model' => 'HiAce', 'vehicle_type' => 'Van', 'current_mileage' => 1000]);
     }
 
-    public function test_role_permissions_control_crud_and_are_returned_by_me(): void
+    public function test_user_permissions_control_crud_and_are_returned_by_me(): void
     {
         $owner = $this->user('permission-owner');
         Sanctum::actingAs($owner);
@@ -46,7 +45,7 @@ class VehicleApiTest extends TestCase
             ->assertOk()
             ->assertJsonFragment(['vehicles.create']);
 
-        Role::findByName('owner', 'web')->revokePermissionTo('vehicles.create');
+        $owner->revokePermissionTo('vehicles.create');
 
         $this->postJson('/api/v1/vehicles', [
             'plate_number' => 'DENIED-1',
@@ -56,7 +55,7 @@ class VehicleApiTest extends TestCase
         ])->assertForbidden();
     }
 
-    public function test_login_returns_effective_role_permissions(): void
+    public function test_login_returns_effective_user_permissions(): void
     {
         $owner = $this->user('login-permissions');
 
@@ -68,9 +67,43 @@ class VehicleApiTest extends TestCase
             ->assertJsonFragment(['vehicles.view']);
     }
 
+    public function test_owner_and_staff_cannot_access_an_ended_plan(): void
+    {
+        $owner = $this->user('ended-plan');
+        $owner->business->update(['plan_ends_at' => now()->subDay()]);
+        $staff = User::create([
+            'business_id' => $owner->business_id,
+            'name' => 'Ended Staff',
+            'email' => 'ended-staff@example.com',
+            'password' => 'password',
+            'role' => 'staff',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+
+        foreach ([$owner, $staff] as $user) {
+            $this->postJson('/api/v1/auth/login', [
+                'email' => $user->email,
+                'password' => 'password',
+            ])->assertForbidden()->assertJsonPath('code', 'PLAN_ENDED');
+        }
+        $this->assertDatabaseHas('businesses', [
+            'id' => $owner->business_id,
+            'subscription_status' => 'past_due',
+        ]);
+
+        Sanctum::actingAs($owner);
+        $this->getJson('/api/v1/me')
+            ->assertForbidden()
+            ->assertJsonPath('code', 'PLAN_ENDED');
+        Sanctum::actingAs($staff);
+        $this->getJson('/api/v1/support/messages')->assertForbidden();
+        $this->postJson('/api/v1/support/messages', ['message' => 'Staff should not send this.'])->assertForbidden();
+    }
+
     public function test_registration_creates_business_owner_trial_and_token(): void
     {
-        $this->postJson('/api/v1/auth/register', ['business_name' => 'Acme Vehicle', 'owner_name' => 'Joel', 'email' => 'owner@acme.test', 'phone' => '09170000000', 'password' => 'Password123!', 'password_confirmation' => 'Password123!'])->assertCreated()->assertJsonPath('data.user.role', 'owner')->assertJsonPath('data.business.subscription_status', 'trial')->assertJsonStructure(['data' => ['token']]);
+        $this->postJson('/api/v1/auth/register', ['business_name' => 'Acme Vehicle', 'owner_name' => 'Joel', 'email' => 'owner@acme.test', 'phone' => '09170000000', 'password' => 'Password123!', 'password_confirmation' => 'Password123!'])->assertCreated()->assertJsonPath('data.user.role', 'owner')->assertJsonPath('data.business.subscription_plan', 'trial')->assertJsonPath('data.business.subscription_status', 'active')->assertJsonStructure(['data' => ['token']]);
         $this->assertDatabaseHas('businesses', ['slug' => 'acme-vehicle']);
     }
 
@@ -107,6 +140,50 @@ class VehicleApiTest extends TestCase
             'model' => 'N-Series',
             'vehicle_type' => 'Truck',
         ])->assertUnprocessable()->assertJsonValidationErrors('vehicle_code');
+    }
+
+    public function test_subscription_tiers_only_limit_the_number_of_vehicles(): void
+    {
+        $owner = $this->user('subscription-limit');
+        Sanctum::actingAs($owner);
+
+        foreach (range(1, 3) as $index) {
+            $this->vehicle($owner, "TRIAL-{$index}");
+        }
+
+        $this->postJson('/api/v1/vehicles', [
+            'plate_number' => 'TRIAL-4',
+            'brand' => 'Toyota',
+            'model' => 'Vios',
+            'vehicle_type' => 'Car',
+        ])->assertUnprocessable()->assertJsonValidationErrors('vehicle');
+
+        $owner->business->update([
+            'subscription_status' => 'active',
+            'subscription_plan' => 'starter',
+        ]);
+
+        foreach (range(4, 5) as $index) {
+            $this->postJson('/api/v1/vehicles', [
+                'plate_number' => "STARTER-{$index}",
+                'brand' => 'Toyota',
+                'model' => 'Vios',
+                'vehicle_type' => 'Car',
+            ])->assertCreated();
+        }
+
+        $this->postJson('/api/v1/vehicles', [
+            'plate_number' => 'STARTER-6',
+            'brand' => 'Toyota',
+            'model' => 'Vios',
+            'vehicle_type' => 'Car',
+        ])->assertUnprocessable()->assertJsonValidationErrors('vehicle');
+
+        $this->getJson('/api/v1/me')
+            ->assertOk()
+            ->assertJsonPath('data.business.subscription.vehicle_limit', 5)
+            ->assertJsonPath('data.business.subscription.vehicle_count', 5)
+            ->assertJsonPath('data.business.subscription.vehicle_limit_reached', true);
     }
 
     public function test_mileage_rejects_rollback_and_allows_admin_audited_override(): void
@@ -271,12 +348,12 @@ class VehicleApiTest extends TestCase
         $this->getJson('/api/v1/audit-logs')->assertForbidden();
     }
 
-    public function test_owner_can_manage_up_to_three_staff_with_staff_as_default_role(): void
+    public function test_staff_accounts_are_not_limited_by_the_vehicle_subscription(): void
     {
         $owner = $this->user('staff-limit');
         Sanctum::actingAs($owner);
 
-        for ($index = 1; $index <= 3; $index++) {
+        for ($index = 1; $index <= 4; $index++) {
             $response = $this->postJson('/api/v1/staff', [
                 'name' => "Staff {$index}",
                 'email' => "staff{$index}@limit.test",
@@ -286,12 +363,7 @@ class VehicleApiTest extends TestCase
             $response->assertJsonPath('data.role', 'staff');
         }
 
-        $this->postJson('/api/v1/staff', [
-            'name' => 'Fourth Staff',
-            'email' => 'staff4@limit.test',
-            'password' => 'Password123!',
-            'password_confirmation' => 'Password123!',
-        ])->assertUnprocessable()->assertJsonValidationErrors('staff');
+        $this->assertDatabaseCount('users', 5);
         $this->assertDatabaseHas('audit_logs', ['action' => 'staff.created']);
     }
 
@@ -330,12 +402,274 @@ class VehicleApiTest extends TestCase
             ->assertJsonPath('data.0.email', $businessOwner->email)
             ->assertJsonPath('data.0.business.users.0.email', $staff->email)
             ->assertJsonPath('meta.total', 1);
+        $this->getJson('/api/v1/superadmin/permissions')
+            ->assertOk()
+            ->assertJsonStructure(['data' => ['modules']]);
+        $this->getJson('/api/v1/superadmin/permissions/users?search='.$businessOwner->email)
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonFragment(['id' => $businessOwner->id, 'email' => $businessOwner->email])
+            ->assertJsonFragment(['vehicles.delete']);
+        $this->getJson("/api/v1/superadmin/permissions/users/{$staff->id}")
+            ->assertOk()
+            ->assertJsonPath('data.email', $staff->email);
+        $ownerPermissions = $businessOwner->getDirectPermissions()->pluck('name')->reject(fn ($permission) => $permission === 'vehicles.delete')->values()->all();
+        $this->putJson("/api/v1/superadmin/permissions/users/{$businessOwner->id}", [
+            'permissions' => $ownerPermissions,
+        ])->assertOk();
+        $this->assertFalse($businessOwner->fresh()->can('vehicles.delete'));
+        $this->assertTrue($staff->fresh()->can('vehicles.view'));
+        $this->putJson('/api/v1/superadmin/permissions/apply-to-role', [
+            'role' => 'staff',
+            'permissions' => ['dashboard.view'],
+        ])->assertOk()
+            ->assertJsonPath('data.updated_users', 1);
+        $this->assertSame(['dashboard.view'], $staff->fresh()->getDirectPermissions()->pluck('name')->all());
+        $this->assertTrue($businessOwner->fresh()->can('vehicles.view'));
+        $this->postJson("/api/v1/superadmin/users/{$staff->id}/impersonate")
+            ->assertOk()
+            ->assertJsonPath('data.user.id', $staff->id)
+            ->assertJsonFragment(['dashboard.view'])
+            ->assertJsonStructure(['data' => ['token']]);
         $this->putJson("/api/v1/superadmin/users/{$businessOwner->id}", ['status' => 'inactive'])
             ->assertOk()
             ->assertJsonPath('data.status', 'inactive');
+        $this->postJson("/api/v1/superadmin/users/{$businessOwner->id}/impersonate")
+            ->assertForbidden();
 
         Sanctum::actingAs($businessOwner);
         $this->getJson('/api/v1/superadmin/dashboard')->assertForbidden();
+        $this->postJson("/api/v1/superadmin/users/{$staff->id}/impersonate")->assertForbidden();
+    }
+
+    public function test_super_admin_can_create_a_business_owner(): void
+    {
+        $superAdmin = User::create([
+            'business_id' => null,
+            'name' => 'Platform Admin',
+            'email' => 'owner-creator@vehiclehub.test',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        Sanctum::actingAs($superAdmin);
+
+        $this->postJson('/api/v1/superadmin/owners', [
+            'business_name' => 'North Fleet',
+            'owner_name' => 'North Owner',
+            'email' => 'owner@north.test',
+            'phone' => '09170000000',
+            'password' => 'Password123!',
+            'password_confirmation' => 'Password123!',
+            'subscription_plan' => 'business',
+            'subscription_status' => 'active',
+            'vehicle_limit_override' => 12,
+            'plan_ends_at' => now()->addYear()->toDateString(),
+        ])->assertCreated()
+            ->assertJsonPath('data.owner.role', 'owner')
+            ->assertJsonPath('data.business.subscription.vehicle_limit', 12)
+            ->assertJsonPath('data.business.subscription.default_vehicle_limit', 25)
+            ->assertJsonPath('data.business.subscription.has_custom_vehicle_limit', true);
+
+        $this->assertDatabaseHas('businesses', [
+            'name' => 'North Fleet',
+            'subscription_plan' => 'business',
+            'subscription_status' => 'active',
+            'vehicle_limit_override' => 12,
+        ]);
+        $owner = User::where('email', 'owner@north.test')->firstOrFail();
+        $this->assertTrue($owner->can('vehicles.create'));
+    }
+
+    public function test_business_status_is_derived_from_the_plan_end_date(): void
+    {
+        $owner = $this->user('reactive-plan-status');
+        $superAdmin = User::create([
+            'business_id' => null,
+            'name' => 'Platform Admin',
+            'email' => 'plan-status-admin@vehiclehub.test',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        Sanctum::actingAs($superAdmin);
+
+        $this->putJson('/api/v1/superadmin/businesses/'.$owner->business_id, [
+            'plan_ends_at' => now()->subDay()->toDateString(),
+            'subscription_status' => 'active',
+        ])->assertOk()->assertJsonPath('data.subscription_status', 'past_due');
+
+        $this->putJson('/api/v1/superadmin/businesses/'.$owner->business_id, [
+            'plan_ends_at' => now()->toDateString(),
+            'subscription_status' => 'past_due',
+        ])->assertOk()->assertJsonPath('data.subscription_status', 'active');
+
+        $this->putJson('/api/v1/superadmin/businesses/'.$owner->business_id, [
+            'plan_ends_at' => now()->addMonth()->toDateString(),
+        ])->assertOk()->assertJsonPath('data.subscription_status', 'active');
+    }
+
+    public function test_business_users_and_super_admin_share_a_support_conversation(): void
+    {
+        $owner = $this->user('support-business');
+        $owner->business->update(['plan_ends_at' => now()->subDay()]);
+        Sanctum::actingAs($owner);
+        $this->postJson('/api/v1/support/messages', ['message' => 'Please reactivate our account.'])
+            ->assertCreated()
+            ->assertJsonPath('data.sender_type', 'tenant');
+
+        $superAdmin = User::create([
+            'business_id' => null,
+            'name' => 'Support Admin',
+            'email' => 'support-admin@vehiclehub.test',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        Sanctum::actingAs($superAdmin);
+        $this->getJson('/api/v1/superadmin/support/conversations')
+            ->assertOk()
+            ->assertJsonPath('data.0.name', 'support-business')
+            ->assertJsonPath('data.0.unread_support_count', 1);
+        $this->postJson('/api/v1/superadmin/support/businesses/'.$owner->business_id, [
+            'message' => 'We are reviewing your renewal.',
+        ])->assertCreated()->assertJsonPath('data.sender_type', 'super_admin');
+
+        Sanctum::actingAs($owner);
+        $this->getJson('/api/v1/support/unread-count')
+            ->assertOk()
+            ->assertJsonPath('data.count', 1);
+        $this->getJson('/api/v1/support/messages')
+            ->assertOk()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.1.message', 'We are reviewing your renewal.');
+        $this->getJson('/api/v1/support/unread-count')
+            ->assertOk()
+            ->assertJsonPath('data.count', 0);
+        $this->getJson('/api/v1/dashboard')->assertForbidden()->assertJsonPath('code', 'PLAN_ENDED');
+    }
+
+    public function test_guest_support_token_restores_only_its_own_conversation(): void
+    {
+        $created = $this->postJson('/api/v1/guest-support/conversations', [
+            'name' => 'Website Visitor',
+            'email' => 'visitor@example.com',
+        ])->assertCreated();
+        $token = $created->json('data.token');
+
+        $this->withHeader('X-Support-Token', $token)
+            ->postJson('/api/v1/guest-support/messages', ['message' => 'I need help before signing in.'])
+            ->assertCreated()
+            ->assertJsonPath('data.sender_type', 'guest');
+
+        $this->withHeader('X-Support-Token', $token)
+            ->getJson('/api/v1/guest-support/messages')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.message', 'I need help before signing in.');
+
+        $this->withHeader('X-Support-Token', str_repeat('x', 64))
+            ->getJson('/api/v1/guest-support/messages')
+            ->assertNotFound();
+
+        $superAdmin = User::create([
+            'name' => 'Guest Support Admin',
+            'email' => 'guest-support-admin@example.com',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        Sanctum::actingAs($superAdmin);
+        $this->getJson('/api/v1/superadmin/support/conversations')
+            ->assertOk()
+            ->assertJsonPath('data.0.conversation_type', 'guest')
+            ->assertJsonPath('data.0.name', 'Website Visitor');
+    }
+
+    public function test_support_history_loads_ten_latest_messages_then_older_messages(): void
+    {
+        $owner = $this->user('support-history');
+        foreach (range(1, 15) as $index) {
+            \App\Models\SupportMessage::create([
+                'business_id' => $owner->business_id,
+                'user_id' => $owner->id,
+                'sender_type' => 'tenant',
+                'message' => "Message {$index}",
+            ]);
+        }
+        Sanctum::actingAs($owner);
+
+        $latest = $this->getJson('/api/v1/support/messages')
+            ->assertOk()
+            ->assertJsonCount(10, 'data')
+            ->assertJsonPath('data.0.message', 'Message 6')
+            ->assertJsonPath('data.9.message', 'Message 15')
+            ->assertJsonPath('meta.has_more', true);
+        $firstId = $latest->json('data.0.id');
+
+        $this->getJson('/api/v1/support/messages?before_id='.$firstId)
+            ->assertOk()
+            ->assertJsonCount(5, 'data')
+            ->assertJsonPath('data.0.message', 'Message 1')
+            ->assertJsonPath('meta.has_more', false);
+    }
+
+    public function test_support_attachments_are_private_to_the_owner_and_super_admin(): void
+    {
+        Storage::fake('local');
+        $owner = $this->user('support-attachment');
+        Sanctum::actingAs($owner);
+        $response = $this->postJson('/api/v1/support/messages', [
+            'attachment' => UploadedFile::fake()->create('renewal.pdf', 100, 'application/pdf'),
+        ])->assertCreated()
+            ->assertJsonPath('data.attachment_name', 'renewal.pdf')
+            ->assertJsonMissingPath('data.attachment_path');
+        $messageId = $response->json('data.id');
+        $stored = \App\Models\SupportMessage::findOrFail($messageId);
+        Storage::disk('local')->assertExists($stored->getRawOriginal('attachment_path'));
+        $this->get('/api/v1/support/attachments/'.$messageId)->assertOk();
+
+        $this->postJson('/api/v1/support/messages', [
+            'attachment' => UploadedFile::fake()->create('proposal.docx', 100, 'application/zip'),
+        ])->assertCreated()->assertJsonPath('data.attachment_name', 'proposal.docx');
+
+        $otherOwner = $this->user('other-support-attachment');
+        Sanctum::actingAs($otherOwner);
+        $this->get('/api/v1/support/attachments/'.$messageId)->assertForbidden();
+    }
+
+    public function test_super_admin_can_create_support_message_templates(): void
+    {
+        $superAdmin = User::create([
+            'name' => 'Support Admin',
+            'email' => 'support-admin@example.com',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        Sanctum::actingAs($superAdmin);
+
+        $this->getJson('/api/v1/superadmin/support/templates')
+            ->assertOk()
+            ->assertJsonCount(5, 'data');
+
+        $this->postJson('/api/v1/superadmin/support/templates', [
+            'title' => 'Follow up',
+            'message' => 'We are following up on your support request.',
+        ])->assertCreated()
+            ->assertJsonPath('data.title', 'Follow up');
+
+        $this->assertDatabaseHas('support_templates', [
+            'title' => 'Follow up',
+            'message' => 'We are following up on your support request.',
+        ]);
+
+        $owner = $this->user('template-owner');
+        Sanctum::actingAs($owner);
+        $this->postJson('/api/v1/superadmin/support/templates', [
+            'title' => 'Forbidden',
+            'message' => 'Owners cannot create templates.',
+        ])->assertForbidden();
     }
 
     public function test_document_creation_ignores_client_business_id(): void

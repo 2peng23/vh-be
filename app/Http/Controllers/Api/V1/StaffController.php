@@ -7,7 +7,6 @@ use App\Services\AuditService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
-use Illuminate\Validation\ValidationException;
 
 class StaffController extends ApiController
 {
@@ -28,10 +27,6 @@ class StaffController extends ApiController
     public function store(Request $request, AuditService $audit)
     {
         $this->tenantOnly($request);
-        $count = User::query()->where('business_id', $request->user()->business_id)->where('role', '!=', 'owner')->count();
-        if ($count >= 3) {
-            throw ValidationException::withMessages(['staff' => 'Your business can have a maximum of 3 staff accounts.']);
-        }
         $data = $this->validated($request);
         $data['business_id'] = $request->user()->business_id;
         $data['role'] ??= 'staff';

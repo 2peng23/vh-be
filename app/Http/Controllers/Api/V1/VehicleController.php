@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Api\V1;
 use App\Enums\VehicleStatus;
 use App\Models\Vehicle;
 use App\Services\AuditService;
+use App\Support\SubscriptionPlans;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class VehicleController extends ApiController
 {
@@ -24,6 +26,15 @@ class VehicleController extends ApiController
 
     public function store(Request $r, AuditService $audit)
     {
+        $business = $r->user()->business;
+        $limit = SubscriptionPlans::vehicleLimit($business);
+        if ($business->vehicles()->count() >= $limit) {
+            $tier = SubscriptionPlans::tier($business);
+            throw ValidationException::withMessages([
+                'vehicle' => "The {$tier} plan allows up to {$limit} vehicles. Upgrade the subscription to add another vehicle.",
+            ]);
+        }
+
         $v = Vehicle::create($this->validateData($r));
         $audit->record('vehicle.created', $v);
 
