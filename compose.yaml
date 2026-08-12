@@ -1,0 +1,71 @@
+name: vehicle-hub-backend
+
+services:
+  backend:
+    build:
+      context: .
+    env_file:
+      - .env.docker
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - backend_storage:/var/www/html/storage
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8000/up') ? 0 : 1);"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  queue:
+    build:
+      context: .
+    command: php artisan queue:work --sleep=3 --tries=3 --timeout=90
+    env_file:
+      - .env.docker
+    volumes:
+      - backend_storage:/var/www/html/storage
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+    command: php artisan schedule:work
+    env_file:
+      - .env.docker
+    volumes:
+      - backend_storage:/var/www/html/storage
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  database:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-vehicle_hub}
+      MYSQL_USER: vehiclehub
+      MYSQL_PASSWORD: ${DB_PASSWORD:-local-password}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-local-root-password}
+    ports:
+      - "${DB_FORWARD_PORT:-3307}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  backend_storage:

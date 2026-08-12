@@ -1,0 +1,89 @@
+name: Backend CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test-build-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: bcmath, gd, pcntl, pdo_mysql, sqlite3, zip
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Prepare application
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Run tests
+        run: php artisan test
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and optionally publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/vehicle-hub-be:latest
+            ghcr.io/${{ github.repository_owner }}/vehicle-hub-be:${{ github.sha }}
+
+  deploy-local:
+    name: Deploy to local Docker
+    needs: test-build-publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, vehicle-hub-be]
+
+    steps:
+      - name: Add Docker Desktop to PATH
+        run: echo "/Applications/Docker.app/Contents/Resources/bin" >> "$GITHUB_PATH"
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create backend environment file
+        env:
+          BACKEND_ENV_FILE: ${{ secrets.BACKEND_ENV_FILE }}
+        run: printf '%s\n' "$BACKEND_ENV_FILE" > .env.docker
+
+      - name: Build backend images
+        run: docker compose build
+
+      - name: Start database
+        run: docker compose up -d database
+
+      - name: Run database migrations
+        run: docker compose run --rm backend php artisan migrate --force
+
+      - name: Start backend services
+        run: docker compose up -d --remove-orphans
+
+      - name: Show container status
+        run: docker compose ps
