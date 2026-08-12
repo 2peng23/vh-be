@@ -19,12 +19,13 @@ class AuthorizationSeeder extends Seeder
         }
         foreach (array_merge(['super_admin'], PermissionCatalog::TENANT_ROLES) as $roleName) {
             $role = Role::findOrCreate($roleName, 'web');
-            if ($roleName !== 'super_admin' && $role->permissions()->doesntExist()) {
-                $role->syncPermissions(PermissionCatalog::defaults($roleName));
-            }
+            $role->syncPermissions([]);
         }
         User::withTrashed()->get()->each(function (User $user) {
             $user->syncRoles($user->role->value);
+            if (! $user->isSuperAdmin()) {
+                $user->syncPermissions(Permission::whereIn('name', PermissionCatalog::defaults($user->role->value))->get());
+            }
         });
         app(PermissionRegistrar::class)->forgetCachedPermissions();
     }

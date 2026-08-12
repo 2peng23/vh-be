@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\OperationsController;
 use App\Http\Controllers\Api\V1\ReportController;
 use App\Http\Controllers\Api\V1\StaffController;
 use App\Http\Controllers\Api\V1\SuperAdminController;
+use App\Http\Controllers\Api\V1\SupportController;
 use App\Http\Controllers\Api\V1\VehicleController;
 use App\Http\Controllers\Api\V1\VehicleResourceController;
 use Illuminate\Foundation\Auth\EmailVerificationRequest;
@@ -32,7 +33,13 @@ Route::prefix('v1')->group(function () {
             return response()->json(['success' => true, 'message' => Password::sendResetLink($r->only('email'))]);
         });
     });
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::prefix('guest-support')->middleware('throttle:60,1')->group(function () {
+        Route::post('conversations', [SupportController::class, 'createGuestConversation']);
+        Route::get('messages', [SupportController::class, 'guestMessages']);
+        Route::post('messages', [SupportController::class, 'guestSend']);
+        Route::get('attachments/{supportMessage}', [SupportController::class, 'guestDownload']);
+    });
+    Route::middleware(['auth:sanctum', 'plan.active'])->group(function () {
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
         Route::put('me', [AuthController::class, 'updateProfile']);
@@ -40,12 +47,28 @@ Route::prefix('v1')->group(function () {
         Route::prefix('superadmin')->group(function () {
             Route::get('dashboard', [SuperAdminController::class, 'dashboard']);
             Route::get('businesses', [SuperAdminController::class, 'businesses']);
+            Route::post('owners', [SuperAdminController::class, 'storeOwner']);
             Route::put('businesses/{business}', [SuperAdminController::class, 'updateBusiness']);
             Route::get('users', [SuperAdminController::class, 'users']);
             Route::put('users/{user}', [SuperAdminController::class, 'updateUser']);
             Route::get('permissions', [SuperAdminController::class, 'permissions']);
-            Route::put('permissions/{role}', [SuperAdminController::class, 'updateRolePermissions']);
+            Route::get('permissions/users', [SuperAdminController::class, 'permissionUsers']);
+            Route::get('permissions/users/{user}', [SuperAdminController::class, 'permissionUser']);
+            Route::put('permissions/apply-to-role', [SuperAdminController::class, 'applyPermissionsToRole']);
+            Route::put('permissions/users/{user}', [SuperAdminController::class, 'updateUserPermissions']);
+            Route::post('users/{user}/impersonate', [SuperAdminController::class, 'impersonate']);
+            Route::get('support/conversations', [SupportController::class, 'conversations']);
+            Route::get('support/businesses/{business}', [SupportController::class, 'adminMessages']);
+            Route::post('support/businesses/{business}', [SupportController::class, 'adminSend']);
+            Route::get('support/guests/{guestSupportConversation}', [SupportController::class, 'adminGuestMessages']);
+            Route::post('support/guests/{guestSupportConversation}', [SupportController::class, 'adminGuestSend']);
+            Route::get('support/templates', [SupportController::class, 'templates']);
+            Route::post('support/templates', [SupportController::class, 'storeTemplate']);
         });
+        Route::get('support/messages', [SupportController::class, 'messages']);
+        Route::post('support/messages', [SupportController::class, 'send']);
+        Route::get('support/unread-count', [SupportController::class, 'unreadCount']);
+        Route::get('support/attachments/{supportMessage}', [SupportController::class, 'download']);
         Route::get('staff', [StaffController::class, 'index'])->middleware('permission:staff.view');
         Route::post('staff', [StaffController::class, 'store'])->middleware('permission:staff.create');
         Route::put('staff/{staff}', [StaffController::class, 'update'])->middleware('permission:staff.update');
