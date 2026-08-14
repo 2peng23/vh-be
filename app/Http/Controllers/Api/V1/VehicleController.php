@@ -35,7 +35,9 @@ class VehicleController extends ApiController
             ]);
         }
 
-        $v = Vehicle::create($this->validateData($r));
+        $data = $this->validateData($r);
+        $data['vehicle_code'] = $this->generateVehicleCode($r->user()->business_id, $data['vehicle_type']);
+        $v = Vehicle::create($data);
         $audit->record('vehicle.created', $v);
 
         return $this->ok($v, 'Vehicle created.', 201);
@@ -45,7 +47,11 @@ class VehicleController extends ApiController
     {
         $this->access($vehicle);
 
-        return $this->ok($vehicle->load(['schedules', 'documents', 'assignments']));
+        return $this->ok(
+            $vehicle
+                ->load(['schedules', 'documents', 'assignments'])
+                ->loadSum('expenses', 'amount')
+        );
     }
 
     public function update(Request $r, Vehicle $vehicle, AuditService $audit)
@@ -74,6 +80,32 @@ class VehicleController extends ApiController
 
     private function validateData(Request $r, ?Vehicle $v = null): array
     {
-        return $r->validate(['plate_number' => ['required', 'string', 'max:30', Rule::unique('vehicles')->where('business_id', $r->user()->business_id)->ignore($v?->id)], 'vehicle_code' => ['nullable', 'string', 'max:50', Rule::unique('vehicles')->where('business_id', $r->user()->business_id)->ignore($v?->id)], 'brand' => 'required|string|max:100', 'model' => 'required|string|max:100', 'variant' => 'nullable|string|max:100', 'year' => 'nullable|integer|min:1900|max:'.(date('Y') + 1), 'vehicle_type' => 'required|string|max:50', 'color' => 'nullable|string|max:50', 'vin' => 'nullable|string|max:100', 'engine_number' => 'nullable|string|max:100', 'chassis_number' => 'nullable|string|max:100', 'current_mileage' => 'sometimes|integer|min:0', 'acquisition_date' => 'nullable|date', 'acquisition_cost' => 'nullable|numeric|min:0', 'status' => ['sometimes', Rule::enum(VehicleStatus::class)], 'notes' => 'nullable|string']);
+        return $r->validate(['plate_number' => ['required', 'string', 'max:30', Rule::unique('vehicles')->where('business_id', $r->user()->business_id)->ignore($v?->id)], 'brand' => 'required|string|max:100', 'model' => 'required|string|max:100', 'variant' => 'nullable|string|max:100', 'year' => 'nullable|integer|min:1900|max:'.(date('Y') + 1), 'vehicle_type' => 'required|string|max:50', 'color' => 'nullable|string|max:50', 'vin' => 'nullable|string|max:100', 'engine_number' => 'nullable|string|max:100', 'chassis_number' => 'nullable|string|max:100', 'current_mileage' => 'sometimes|integer|min:0', 'acquisition_date' => 'nullable|date', 'acquisition_cost' => 'nullable|numeric|min:0', 'status' => ['sometimes', Rule::enum(VehicleStatus::class)], 'notes' => 'nullable|string']);
+    }
+
+    private function generateVehicleCode(int $businessId, string $vehicleType): string
+    {
+        $prefix = match (strtolower(trim($vehicleType))) {
+            'truck' => 'TRK-',
+            'van' => 'VAN-',
+            'car' => 'CAR-',
+            'bus' => 'BUS-',
+            'pickup' => 'PUP-',
+            'motorcycle' => 'MC-',
+            'suv' => 'SUV-',
+            'heavy equipment' => 'HEQ-',
+            default => 'OTH-',
+        };
+        $characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+        do {
+            $suffix = '';
+            for ($i = 0; $i < 6; $i++) {
+                $suffix .= $characters[random_int(0, strlen($characters) - 1)];
+            }
+            $code = $prefix.$suffix;
+        } while (Vehicle::withTrashed()->where('business_id', $businessId)->where('vehicle_code', $code)->exists());
+
+        return $code;
     }
 }

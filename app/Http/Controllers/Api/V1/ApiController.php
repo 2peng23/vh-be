@@ -12,8 +12,8 @@ class ApiController extends Controller
         return response()->json(['success' => true, 'message' => $message, 'data' => $data], $status);
     }
 
-    protected function paginated(LengthAwarePaginator $p)
+    protected function paginated(LengthAwarePaginator $p, array $additionalMeta = [])
     {
-        return response()->json(['success' => true, 'message' => 'OK', 'data' => $p->items(), 'meta' => ['current_page' => $p->currentPage(), 'last_page' => $p->lastPage(), 'per_page' => $p->perPage(), 'total' => $p->total()]]);
+        return response()->json(['success' => true, 'message' => 'OK', 'data' => $p->items(), 'meta' => array_merge(['current_page' => $p->currentPage(), 'last_page' => $p->lastPage(), 'per_page' => $p->perPage(), 'total' => $p->total()], $additionalMeta)]);
     }
 }

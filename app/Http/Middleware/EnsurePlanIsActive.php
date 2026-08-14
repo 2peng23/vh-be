@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -13,10 +14,18 @@ class EnsurePlanIsActive
         $isPlanPurchaseRequest = $request->isMethod('GET')
             && ($request->is('api/v1/plan-offerings') || $request->is('api/v1/payment-methods'));
 
+        $user = $request->user();
+        $currentUserStatus = $user ? User::whereKey($user->id)->value('status') : null;
+        if ($user?->role->value === 'staff' && $currentUserStatus !== 'active') {
+            return response()->json([
+                'success' => false,
+                'code' => 'STAFF_INACTIVE',
+                'message' => 'Your staff account is inactive. Please contact your business owner.',
+            ], 403);
+        }
         if ($request->is('api/v1/support/*') || $request->is('api/v1/superadmin/support/*') || $request->is('api/v1/plan-transactions*') || $isPlanPurchaseRequest) {
             return $next($request);
         }
-        $user = $request->user();
         if ($user?->business_id) {
             $user->business?->syncPlanStatus();
         }
