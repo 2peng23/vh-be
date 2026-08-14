@@ -44,7 +44,7 @@ class DatabaseSeeder extends Seeder
                     'current_mileage' => 10000 + (($b * 8 + $i) * 3750),
                     'status' => 'active',
                 ]);
-                MaintenanceSchedule::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'maintenance_type' => 'General PMS', 'interval_type' => 'both', 'interval_km' => 5000, 'interval_months' => 6, 'next_service_mileage' => $v->current_mileage + (($i % 4) * 1000) - 500, 'next_service_date' => now()->addDays(($i * 9) - 14)]);
+                MaintenanceSchedule::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'maintenance_type' => 'General Maintenance Schedule', 'interval_type' => 'both', 'interval_km' => 5000, 'interval_months' => 6, 'next_service_mileage' => $v->current_mileage + (($i % 4) * 1000) - 500, 'next_service_date' => now()->addDays(($i * 9) - 14)]);
                 VehicleExpense::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'category' => $expenseCategories[$i % count($expenseCategories)], 'amount' => 500 + ($i * 725.50), 'expense_date' => now()->subDays($i * 7), 'vendor' => "Demo Vendor $i", 'recorded_by' => $staff->first()->id]);
                 VehicleDocument::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'document_type' => $documentTypes[$i % count($documentTypes)], 'expiration_date' => now()->addDays(($i * 12) - 10)]);
                 if ($i % 3 === 0) {

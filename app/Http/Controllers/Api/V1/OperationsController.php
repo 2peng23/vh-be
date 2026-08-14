@@ -23,14 +23,15 @@ class OperationsController extends ApiController
                             ->whereRaw('next_service_mileage < (select current_mileage from vehicles where vehicles.id = maintenance_schedules.vehicle_id)');
                     });
             }))
-            ->when($filter === 'upcoming', fn (Builder $query) => $query->where(function (Builder $query) use ($now) {
-                $query->whereBetween('next_service_date', [$now, $now->copy()->addDays(30)])
-                    ->orWhere(function (Builder $query) {
-                        $query->whereNotNull('next_service_mileage')
-                            ->whereRaw('next_service_mileage >= (select current_mileage from vehicles where vehicles.id = maintenance_schedules.vehicle_id)')
-                            ->whereRaw('next_service_mileage <= (select current_mileage from vehicles where vehicles.id = maintenance_schedules.vehicle_id) + reminder_km');
-                    });
-            }));
+            ->when($filter === 'upcoming', fn (Builder $query) => $query
+                ->where(function (Builder $query) use ($now) {
+                    $query->whereNull('next_service_date')
+                        ->orWhereDate('next_service_date', '>=', $now);
+                })
+                ->where(function (Builder $query) {
+                    $query->whereNull('next_service_mileage')
+                        ->orWhereRaw('next_service_mileage >= (select current_mileage from vehicles where vehicles.id = maintenance_schedules.vehicle_id)');
+                }));
 
         $paginator = $query->orderByRaw('next_service_date is null, next_service_date asc')
             ->paginate(min((int) $request->input('per_page', 20), 100));

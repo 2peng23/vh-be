@@ -9,6 +9,7 @@ use App\Models\SupportMessage;
 use App\Models\User;
 use App\Models\Vehicle;
 use App\Models\VehicleExpense;
+use App\Support\SubscriptionPlans;
 use Database\Seeders\AuthorizationSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -156,19 +157,22 @@ class VehicleApiTest extends TestCase
         $this->postJson('/api/v1/vehicles', ['plate_number' => 'ABC-123', 'brand' => 'Honda', 'model' => 'City', 'vehicle_type' => 'Car'])->assertCreated();
     }
 
-    public function test_vehicle_code_is_unique_inside_business(): void
+    public function test_vehicle_code_is_generated_from_type_and_client_value_is_ignored(): void
     {
         $owner = $this->user('vehicle-codes');
-        $this->vehicle($owner, 'CODE-1')->update(['vehicle_code' => 'TRK-0001']);
         Sanctum::actingAs($owner);
 
-        $this->postJson('/api/v1/vehicles', [
+        $response = $this->postJson('/api/v1/vehicles', [
             'plate_number' => 'CODE-2',
-            'vehicle_code' => 'TRK-0001',
+            'vehicle_code' => 'CLIENT-CODE',
             'brand' => 'Isuzu',
             'model' => 'N-Series',
             'vehicle_type' => 'Truck',
-        ])->assertUnprocessable()->assertJsonValidationErrors('vehicle_code');
+        ])->assertCreated();
+
+        $code = $response->json('data.vehicle_code');
+        $this->assertMatchesRegularExpression('/^TRK-[A-Z0-9]{6}$/', $code);
+        $this->assertNotSame('CLIENT-CODE', $code);
     }
 
     public function test_subscription_tiers_only_limit_the_number_of_vehicles(): void
@@ -229,19 +233,20 @@ class VehicleApiTest extends TestCase
     public function test_maintenance_total_is_server_calculated(): void
     {
         $u = $this->user('maint');
-        $v = $this->vehicle($u, 'PMS-1');
+        $v = $this->vehicle($u, 'MAINTENANCE-1');
         Sanctum::actingAs($u);
-        $this->postJson("/api/v1/vehicles/$v->id/maintenance", ['service_date' => now()->toDateString(), 'mileage' => 1000, 'maintenance_type' => 'General PMS', 'service_provider' => 'Vehicle Hub Workshop', 'labor_cost' => 100, 'parts_cost' => 200, 'other_cost' => 50])->assertCreated()->assertJsonPath('data.total_cost', '350.00');
+        $this->postJson("/api/v1/vehicles/$v->id/maintenance", ['service_date' => now()->toDateString(), 'mileage' => 1000, 'maintenance_type' => 'General Maintenance Schedule', 'service_provider' => 'Vehicle Hub Workshop', 'labor_cost' => 100, 'parts_cost' => 200, 'other_cost' => 50, 'notes' => 'Other cost includes towing and shop supplies.'])->assertCreated()->assertJsonPath('data.total_cost', '350.00');
         $this->getJson("/api/v1/vehicles/$v->id/maintenance")
             ->assertOk()
             ->assertJsonPath('data.0.performer.name', $u->name)
-            ->assertJsonPath('data.0.service_provider', 'Vehicle Hub Workshop');
+            ->assertJsonPath('data.0.service_provider', 'Vehicle Hub Workshop')
+            ->assertJsonPath('data.0.notes', 'Other cost includes towing and shop supplies.');
     }
 
     public function test_maintenance_can_be_updated_and_deleted(): void
     {
         $user = $this->user('maint-crud');
-        $vehicle = $this->vehicle($user, 'PMS-CRUD');
+        $vehicle = $this->vehicle($user, 'MAINTENANCE-CRUD');
         Sanctum::actingAs($user);
 
         $id = $this->postJson("/api/v1/vehicles/{$vehicle->id}/maintenance", [
@@ -251,13 +256,114 @@ class VehicleApiTest extends TestCase
             'labor_cost' => 100,
             'parts_cost' => 200,
         ])->assertCreated()->json('data.id');
+        $this->assertDatabaseHas('vehicle_expenses', [
+            'maintenance_record_id' => $id,
+            'category' => 'Maintenance',
+            'amount' => 300,
+        ]);
 
         $this->putJson("/api/v1/vehicles/{$vehicle->id}/maintenance/{$id}", [
             'labor_cost' => 150,
         ])->assertOk()->assertJsonPath('data.total_cost', '350.00');
+        $this->assertDatabaseHas('vehicle_expenses', [
+            'maintenance_record_id' => $id,
+            'amount' => 350,
+        ]);
 
         $this->deleteJson("/api/v1/vehicles/{$vehicle->id}/maintenance/{$id}")->assertOk();
         $this->assertSoftDeleted('maintenance_records', ['id' => $id]);
+        $this->assertSoftDeleted('vehicle_expenses', ['maintenance_record_id' => $id]);
+    }
+
+    public function test_linked_maintenance_advances_its_schedule(): void
+    {
+        $user = $this->user('linked-maintenance');
+        $vehicle = $this->vehicle($user, 'LINKED-MAINT');
+        $schedule = MaintenanceSchedule::withoutGlobalScopes()->create([
+            'business_id' => $user->business_id,
+            'vehicle_id' => $vehicle->id,
+            'maintenance_type' => 'Oil change',
+            'interval_type' => 'both',
+            'interval_km' => 5000,
+            'interval_months' => 6,
+            'next_service_mileage' => 1000,
+            'next_service_date' => '2026-01-01',
+        ]);
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/v1/vehicles/{$vehicle->id}/maintenance", [
+            'maintenance_schedule_id' => $schedule->id,
+            'service_date' => '2026-08-14',
+            'mileage' => 1200,
+            'maintenance_type' => 'Oil change',
+        ])->assertCreated();
+
+        $this->assertDatabaseHas('maintenance_schedules', [
+            'id' => $schedule->id,
+            'last_service_date' => '2026-08-14 00:00:00',
+            'last_service_mileage' => 1200,
+            'next_service_date' => '2027-02-14 00:00:00',
+            'next_service_mileage' => 6200,
+            'status' => 'active',
+        ]);
+    }
+
+    public function test_schedule_initial_due_values_are_calculated_from_vehicle_and_creation_date(): void
+    {
+        $this->travelTo('2026-08-14 10:00:00');
+        $user = $this->user('initial-schedule-due');
+        $vehicle = $this->vehicle($user, 'INITIAL-DUE');
+        $vehicle->update(['current_mileage' => 2500]);
+        Sanctum::actingAs($user);
+
+        $scheduleId = $this->postJson("/api/v1/vehicles/{$vehicle->id}/schedules", [
+            'maintenance_type' => 'Change Oil',
+            'interval_type' => 'both',
+            'interval_km' => 5000,
+            'interval_months' => 5,
+        ])->assertCreated()
+            ->assertJsonPath('data.next_service_mileage', 7500)
+            ->json('data.id');
+
+        $this->assertDatabaseHas('maintenance_schedules', [
+            'id' => $scheduleId,
+            'next_service_mileage' => 7500,
+            'next_service_date' => '2027-01-14 00:00:00',
+        ]);
+    }
+
+    public function test_fuel_expense_is_created_synchronized_and_deleted_with_its_log(): void
+    {
+        $user = $this->user('fuel-expense-sync');
+        $vehicle = $this->vehicle($user, 'FUEL-SYNC');
+        Sanctum::actingAs($user);
+
+        $fuelId = $this->postJson("/api/v1/vehicles/{$vehicle->id}/fuel", [
+            'fuel_date' => now()->toDateString(),
+            'mileage' => 1200,
+            'liters' => 20,
+            'price_per_liter' => 60,
+            'station' => 'Sample Fuel Station',
+        ])->assertCreated()->json('data.id');
+
+        $expenseId = VehicleExpense::where('fuel_log_id', $fuelId)->firstOrFail()->id;
+        $this->assertDatabaseHas('vehicle_expenses', [
+            'id' => $expenseId,
+            'category' => 'Fuel',
+            'amount' => 1200,
+        ]);
+
+        $this->putJson("/api/v1/vehicles/{$vehicle->id}/fuel/{$fuelId}", [
+            'price_per_liter' => 65,
+        ])->assertOk();
+        $this->assertDatabaseHas('vehicle_expenses', ['id' => $expenseId, 'amount' => 1300]);
+
+        $this->putJson("/api/v1/vehicles/{$vehicle->id}/expenses/{$expenseId}", [
+            'amount' => 1,
+        ])->assertUnprocessable()->assertJsonValidationErrors('expense');
+
+        $this->deleteJson("/api/v1/vehicles/{$vehicle->id}/fuel/{$fuelId}")->assertOk();
+        $this->assertSoftDeleted('vehicle_expenses', ['id' => $expenseId]);
     }
 
     public function test_mileage_edit_and_delete_recalculate_current_reading(): void
@@ -332,13 +438,13 @@ class VehicleApiTest extends TestCase
             'title' => 'Brake inspection',
             'description' => 'Brake pedal feels soft.',
             'category' => 'Brakes',
-            'assigned_to' => $reporter->id,
+            'assigned_to_name' => 'Juan Dela Cruz - Main Workshop',
         ])->assertCreated();
 
         $this->getJson("/api/v1/vehicles/{$vehicle->id}/issues")
             ->assertOk()
             ->assertJsonPath('data.0.reporter.name', $reporter->name)
-            ->assertJsonPath('data.0.assignee.name', $reporter->name);
+            ->assertJsonPath('data.0.assigned_to_name', 'Juan Dela Cruz - Main Workshop');
     }
 
     public function test_audit_log_is_tenant_scoped_manager_only_and_exportable(): void
@@ -394,6 +500,145 @@ class VehicleApiTest extends TestCase
 
         $this->assertDatabaseCount('users', 5);
         $this->assertDatabaseHas('audit_logs', ['action' => 'staff.created']);
+    }
+
+    public function test_driver_employee_id_is_generated_and_profile_file_is_private(): void
+    {
+        Storage::fake();
+        $owner = $this->user('acme-fleet');
+        $owner->business->update(['name' => 'Acme Fleet']);
+        Sanctum::actingAs($owner);
+
+        $response = $this->post('/api/v1/drivers', [
+            'name' => 'Test Driver',
+            'status' => 'active',
+            'driver_photo' => UploadedFile::fake()->image('driver.png'),
+            'license_photo' => UploadedFile::fake()->image('license.png'),
+        ])->assertCreated();
+
+        $employeeId = $response->json('data.employee_number');
+        $this->assertMatchesRegularExpression('/^ACMEFLEET-[A-Z0-9]{6}$/', $employeeId);
+        $path = $response->json('data.profile_photo');
+        $licensePath = $response->json('data.license_photo');
+        Storage::assertExists($path);
+        Storage::assertExists($licensePath);
+        $this->get("/api/v1/drivers/{$response->json('data.id')}/files/driver")->assertOk();
+        $this->get("/api/v1/drivers/{$response->json('data.id')}/files/license")->assertOk();
+
+        $updated = $this->post("/api/v1/drivers/{$response->json('data.id')}", [
+            '_method' => 'PUT',
+            'name' => 'Updated Driver',
+            'employee_number' => $employeeId,
+            'status' => 'inactive',
+            'driver_photo' => UploadedFile::fake()->image('new-driver.png'),
+        ])->assertOk();
+        $this->assertSame('Updated Driver', $updated->json('data.name'));
+        Storage::assertMissing($path);
+        Storage::assertExists($updated->json('data.profile_photo'));
+
+        $this->putJson("/api/v1/drivers/{$response->json('data.id')}", [
+            'status' => 'completed',
+        ])->assertUnprocessable()->assertJsonValidationErrors('status');
+
+        $otherOwner = $this->user('other-driver-owner');
+        Sanctum::actingAs($otherOwner);
+        $this->get("/api/v1/drivers/{$response->json('data.id')}/files/driver")->assertNotFound();
+    }
+
+    public function test_owner_can_recreate_and_restore_their_deleted_staff_email(): void
+    {
+        $owner = $this->user('staff-restore');
+        $staff = User::create([
+            'business_id' => $owner->business_id,
+            'name' => 'Old Staff Name',
+            'email' => 'restored-staff@example.com',
+            'password' => 'OldPassword123!',
+            'role' => 'staff',
+            'status' => 'inactive',
+        ]);
+        Sanctum::actingAs($owner);
+
+        $this->deleteJson("/api/v1/staff/{$staff->id}")->assertOk();
+
+        $this->postJson('/api/v1/staff', [
+            'name' => 'Restored Staff',
+            'email' => 'restored-staff@example.com',
+            'phone' => '09171234567',
+            'status' => 'active',
+            'password' => 'NewPassword123!',
+            'password_confirmation' => 'NewPassword123!',
+        ])->assertCreated()
+            ->assertJsonPath('message', 'Staff account restored.')
+            ->assertJsonPath('data.id', $staff->id)
+            ->assertJsonPath('data.name', 'Restored Staff');
+
+        $this->assertDatabaseHas('users', [
+            'id' => $staff->id,
+            'name' => 'Restored Staff',
+            'email' => 'restored-staff@example.com',
+            'deleted_at' => null,
+        ]);
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'staff.restored',
+            'entity_id' => $staff->id,
+        ]);
+    }
+
+    public function test_inactive_staff_cannot_log_in_or_use_an_existing_token(): void
+    {
+        $owner = $this->user('inactive-staff-access');
+        $staff = User::create([
+            'business_id' => $owner->business_id,
+            'name' => 'Inactive Staff',
+            'email' => 'inactive-access@example.com',
+            'password' => 'Password123!',
+            'role' => 'staff',
+            'status' => 'active',
+        ]);
+        Sanctum::actingAs($staff);
+        $this->getJson('/api/v1/me')->assertOk();
+
+        User::whereKey($staff->id)->update(['status' => 'inactive']);
+
+        $this->getJson('/api/v1/me')
+            ->assertForbidden()
+            ->assertJsonPath('code', 'STAFF_INACTIVE')
+            ->assertJsonPath('message', 'Your staff account is inactive. Please contact your business owner.');
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => $staff->email,
+            'password' => 'Password123!',
+        ])->assertForbidden()
+            ->assertJsonPath('code', 'STAFF_INACTIVE')
+            ->assertJsonPath('data.user.business.email', $owner->business->email);
+    }
+
+    public function test_owner_cannot_restore_a_deleted_staff_email_from_another_business(): void
+    {
+        $firstOwner = $this->user('staff-email-first-owner');
+        $secondOwner = $this->user('staff-email-second-owner');
+        $staff = User::create([
+            'business_id' => $firstOwner->business_id,
+            'name' => 'First Owner Staff',
+            'email' => 'shared-deleted-staff@example.com',
+            'password' => 'Password123!',
+            'role' => 'staff',
+        ]);
+        $staff->delete();
+        Sanctum::actingAs($secondOwner);
+
+        $this->postJson('/api/v1/staff', [
+            'name' => 'Second Owner Staff',
+            'email' => 'shared-deleted-staff@example.com',
+            'password' => 'Password123!',
+            'password_confirmation' => 'Password123!',
+        ])->assertUnprocessable()->assertJsonValidationErrors('email');
+
+        $this->assertSoftDeleted('users', ['id' => $staff->id]);
+        $this->assertDatabaseMissing('users', [
+            'business_id' => $secondOwner->business_id,
+            'email' => 'shared-deleted-staff@example.com',
+        ]);
     }
 
     public function test_super_admin_can_manage_all_businesses_and_users(): void
@@ -560,8 +805,8 @@ class VehicleApiTest extends TestCase
         $this->assertNull($inherited->fresh()->vehicle_limit_override);
         $this->assertSame(20, $higherOverride->fresh()->vehicle_limit_override);
         $this->assertNull($lowerOverride->fresh()->vehicle_limit_override);
-        $this->assertSame(10, \App\Support\SubscriptionPlans::vehicleLimit($inherited->fresh()));
-        $this->assertSame(10, \App\Support\SubscriptionPlans::vehicleLimit($lowerOverride->fresh()));
+        $this->assertSame(10, SubscriptionPlans::vehicleLimit($inherited->fresh()));
+        $this->assertSame(10, SubscriptionPlans::vehicleLimit($lowerOverride->fresh()));
     }
 
     public function test_business_status_is_derived_from_the_plan_end_date(): void
@@ -809,7 +1054,7 @@ class VehicleApiTest extends TestCase
         MaintenanceSchedule::withoutGlobalScopes()->create([
             'business_id' => $user->business_id,
             'vehicle_id' => $vehicle->id,
-            'maintenance_type' => 'General PMS',
+            'maintenance_type' => 'General Maintenance Schedule',
             'interval_type' => 'mileage',
             'next_service_mileage' => 900,
             'reminder_km' => 2000,
@@ -819,6 +1064,7 @@ class VehicleApiTest extends TestCase
 
         $this->getJson('/api/v1/dashboard')
             ->assertOk()
+            ->assertJsonPath('data.maintenance.total', 1)
             ->assertJsonPath('data.maintenance.upcoming', 0)
             ->assertJsonPath('data.maintenance.overdue', 1);
     }
@@ -858,7 +1104,7 @@ class VehicleApiTest extends TestCase
             MaintenanceSchedule::withoutGlobalScopes()->create([
                 'business_id' => $owner->business_id,
                 'vehicle_id' => $ownedVehicle->id,
-                'maintenance_type' => 'General PMS',
+                'maintenance_type' => 'General Maintenance Schedule',
                 'interval_type' => 'mileage',
                 'next_service_mileage' => 1500,
                 'reminder_km' => 1000,
@@ -871,6 +1117,48 @@ class VehicleApiTest extends TestCase
             ->assertOk()
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.vehicle.plate_number', 'OPS-A');
+    }
+
+    public function test_upcoming_maintenance_filter_excludes_schedules_overdue_by_date_or_mileage(): void
+    {
+        $owner = $this->user('maintenance-filter');
+        $vehicle = $this->vehicle($owner, 'FILTER-1');
+        $vehicle->update(['current_mileage' => 5000]);
+
+        MaintenanceSchedule::withoutGlobalScopes()->create([
+            'business_id' => $owner->business_id,
+            'vehicle_id' => $vehicle->id,
+            'maintenance_type' => 'Valid Upcoming',
+            'interval_type' => 'both',
+            'next_service_date' => now()->addDays(10),
+            'next_service_mileage' => 5500,
+            'reminder_km' => 1000,
+        ]);
+        MaintenanceSchedule::withoutGlobalScopes()->create([
+            'business_id' => $owner->business_id,
+            'vehicle_id' => $vehicle->id,
+            'maintenance_type' => 'Mileage Overdue',
+            'interval_type' => 'both',
+            'next_service_date' => now()->addDays(10),
+            'next_service_mileage' => 4500,
+            'reminder_km' => 1000,
+        ]);
+        MaintenanceSchedule::withoutGlobalScopes()->create([
+            'business_id' => $owner->business_id,
+            'vehicle_id' => $vehicle->id,
+            'maintenance_type' => 'Date Overdue',
+            'interval_type' => 'both',
+            'next_service_date' => now()->subDay(),
+            'next_service_mileage' => 5500,
+            'reminder_km' => 1000,
+        ]);
+        Sanctum::actingAs($owner);
+
+        $this->getJson('/api/v1/maintenance?filter=upcoming')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.maintenance_type', 'Valid Upcoming')
+            ->assertJsonPath('data.0.due_status', 'upcoming');
     }
 
     public function test_vehicle_document_attachment_is_stored_and_tenant_protected(): void

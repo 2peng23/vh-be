@@ -36,7 +36,21 @@ class AuthController extends ApiController
     {
         $v = $r->validate(['email' => 'required|email', 'password' => 'required|string', 'device_name' => 'nullable|string|max:100']);
         $u = User::where('email', $v['email'])->first();
-        if (! $u || ! Hash::check($v['password'], $u->password) || $u->status !== 'active') {
+        if (! $u || ! Hash::check($v['password'], $u->password)) {
+            return response()->json(['success' => false, 'message' => 'Invalid credentials.'], 422);
+        }
+        if ($u->role->value === 'staff' && $u->status !== 'active') {
+            return response()->json([
+                'success' => false,
+                'code' => 'STAFF_INACTIVE',
+                'message' => 'Your staff account is inactive. Please contact your business owner.',
+                'data' => [
+                    'user' => $this->withAuthorization($u),
+                    'token' => $u->createToken('access-status')->plainTextToken,
+                ],
+            ], 403);
+        }
+        if ($u->status !== 'active') {
             return response()->json(['success' => false, 'message' => 'Invalid credentials.'], 422);
         }
         $u->business?->syncPlanStatus();

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Models\User;
 use App\Services\AuditService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 
@@ -27,14 +28,34 @@ class StaffController extends ApiController
     public function store(Request $request, AuditService $audit)
     {
         $this->tenantOnly($request);
-        $data = $this->validated($request);
+        $deletedStaff = User::onlyTrashed()
+            ->where('business_id', $request->user()->business_id)
+            ->where('role', 'staff')
+            ->where('email', $request->input('email'))
+            ->first();
+        $data = $this->validated($request, $deletedStaff);
         $data['business_id'] = $request->user()->business_id;
         $data['role'] ??= 'staff';
-        $user = User::create($data);
-        $user->syncAuthorizationRole();
-        $audit->record('staff.created', $user);
 
-        return $this->ok($user, 'Staff account created.', 201);
+        $user = DB::transaction(function () use ($data, $deletedStaff, $audit) {
+            if ($deletedStaff) {
+                $old = $deletedStaff->toArray();
+                $deletedStaff->restore();
+                $deletedStaff->update($data);
+                $deletedStaff->syncAuthorizationRole();
+                $audit->record('staff.restored', $deletedStaff, $old);
+
+                return $deletedStaff->fresh();
+            }
+
+            $user = User::create($data);
+            $user->syncAuthorizationRole();
+            $audit->record('staff.created', $user);
+
+            return $user;
+        });
+
+        return $this->ok($user, $deletedStaff ? 'Staff account restored.' : 'Staff account created.', 201);
     }
 
     public function update(Request $request, User $staff, AuditService $audit)
