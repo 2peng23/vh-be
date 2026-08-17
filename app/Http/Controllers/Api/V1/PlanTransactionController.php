@@ -26,7 +26,7 @@ class PlanTransactionController extends ApiController
 
         $transaction = DB::transaction(function () use ($request, $business, $offering, $method) {
             do {
-                $reference = (Str::upper(Str::slug($business->name)) ?: 'BUSINESS').'-'.now()->format('Ymd').'-'.Str::upper(Str::random(8));
+                $reference = (Str::upper(Str::slug($business->name)) ?: 'BUSINESS') . '-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
             } while (PlanTransaction::where('reference', $reference)->exists());
 
             return PlanTransaction::create([
@@ -74,23 +74,83 @@ class PlanTransactionController extends ApiController
     }
 
     /** Let the business owner declare that payment has been sent for this transaction. */
-    public function markAsPaid(Request $request, PlanTransaction $planTransaction)
-    {
-        $this->ownerOnly($request);
-        abort_unless($planTransaction->business_id === $request->user()->business_id, 404);
+    public function submitPayment(
+        Request $request,
+        PlanTransaction $planTransaction
+    ) {
+        $validated = $request->validate([
+            'payment_reference' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+            'proof' => [
+                'nullable',
+                'file',
+                'mimes:jpg,jpeg,png,webp,pdf',
+                'max:10240',
+            ],
+        ]);
 
-        if ($planTransaction->payment_status !== 'paid') {
-            $planTransaction->update([
-                'payment_status' => 'paid',
-                'paid_marked_at' => now(),
-                'paid_at' => now()->toDateString(),
-            ]);
+        if (
+            empty($validated['payment_reference']) &&
+            !$request->hasFile('proof')
+        ) {
+            return response()->json([
+                'message' => 'Please provide a payment reference or upload payment proof.',
+            ], 422);
         }
 
-        return $this->ok(
-            $planTransaction->fresh()->load('selectedPaymentMethod:id,name,account_name,account_number,qr_path'),
-            'Transaction marked as paid.'
+        if ($planTransaction->payment_status === 'paid') {
+            return response()->json([
+                'message' => 'This transaction has already been paid.',
+            ], 422);
+        }
+
+        // Important:
+        // Make sure the transaction belongs to the currently authenticated
+        // business/owner. Replace this with your actual ownership structure.
+        //
+        // Example:
+        abort_unless(
+            $planTransaction->business_id === $request->user()->business_id,
+            403
         );
+
+        DB::transaction(function () use (
+            $request,
+            $validated,
+            $planTransaction
+        ) {
+            $proofPath = $planTransaction->payment_proof_path;
+
+            if ($request->hasFile('proof')) {
+                if ($proofPath) {
+                    Storage::disk('local')->delete($proofPath);
+                }
+
+                $proofPath = $request
+                    ->file('proof')
+                    ->store(
+                        "payment-proofs/{$planTransaction->id}",
+                        'local'
+                    );
+            }
+
+            $planTransaction->update([
+                'payment_reference' => $validated['payment_reference'] ?? null,
+                'payment_proof_path' => $proofPath,
+                'payment_status' => 'pending_verification',
+                'payment_submitted_at' => now(),
+                'payment_verified_at' => null,
+                'payment_rejection_reason' => null,
+            ]);
+        });
+
+        return response()->json([
+            'message' => 'Payment submitted successfully and is awaiting verification.',
+            'data' => $planTransaction->fresh(),
+        ]);
     }
 
     /** Stream the selected payment method QR only to the transaction's business owner. */

@@ -10,6 +10,7 @@ use App\Models\Vehicle;
 use App\Support\PermissionCatalog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -36,10 +37,10 @@ class SuperAdminController extends ApiController
     public function businesses(Request $request)
     {
         Business::syncEndedPlanStatuses();
-        $query = Business::query()->with(['users' => fn ($q) => $q->where('role', 'owner')->select('id', 'business_id', 'name', 'email')])->withCount(['users', 'vehicles']);
+        $query = Business::query()->with(['users' => fn($q) => $q->where('role', 'owner')->select('id', 'business_id', 'name', 'email')])->withCount(['users', 'vehicles']);
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn ($q) => $q->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"));
+            $query->where(fn($q) => $q->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"));
         }
 
         return $this->paginated($query->latest()->paginate(min((int) $request->input('per_page', 20), 100)));
@@ -63,7 +64,7 @@ class SuperAdminController extends ApiController
             $baseSlug = Str::slug($data['business_name']) ?: 'business';
             $slug = $baseSlug;
             while (Business::where('slug', $slug)->exists()) {
-                $slug = $baseSlug.'-'.Str::lower(Str::random(5));
+                $slug = $baseSlug . '-' . Str::lower(Str::random(5));
             }
 
             $business = Business::create([
@@ -112,7 +113,7 @@ class SuperAdminController extends ApiController
         }
         $business->update($data);
         if (($data['status'] ?? null) === 'inactive') {
-            $business->users()->each(fn (User $user) => $user->tokens()->delete());
+            $business->users()->each(fn(User $user) => $user->tokens()->delete());
         }
 
         return $this->ok($business->fresh(), 'Business updated.');
@@ -125,10 +126,10 @@ class SuperAdminController extends ApiController
 
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn ($transaction) => $transaction
+            $query->where(fn($transaction) => $transaction
                 ->where('reference', 'like', "%{$search}%")
                 ->orWhere('plan', 'like', "%{$search}%")
-                ->orWhereHas('business', fn ($business) => $business
+                ->orWhereHas('business', fn($business) => $business
                     ->where('name', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%")));
         }
@@ -147,9 +148,9 @@ class SuperAdminController extends ApiController
 
         if ($request->filled('payment_method')) {
             $paymentMethod = $request->string('payment_method')->trim()->value();
-            $query->where(fn ($transaction) => $transaction
+            $query->where(fn($transaction) => $transaction
                 ->where('payment_method', $paymentMethod)
-                ->orWhereHas('selectedPaymentMethod', fn ($method) => $method->where('name', $paymentMethod)));
+                ->orWhereHas('selectedPaymentMethod', fn($method) => $method->where('name', $paymentMethod)));
         }
 
         if ($request->filled('date_from')) {
@@ -225,7 +226,7 @@ class SuperAdminController extends ApiController
         $prefix = Str::upper(Str::slug($business->name, '-')) ?: 'BUSINESS';
         $date = date('Ymd', strtotime($paidAt));
         do {
-            $reference = "{$prefix}-{$date}-".Str::upper(Str::random(8));
+            $reference = "{$prefix}-{$date}-" . Str::upper(Str::random(8));
         } while (PlanTransaction::where('reference', $reference)->exists());
 
         return $reference;
@@ -237,7 +238,7 @@ class SuperAdminController extends ApiController
         $query = User::withTrashed()
             ->with([
                 'business:id,name,subscription_plan,subscription_status,vehicle_limit_override,plan_ends_at',
-                'business.users' => fn ($q) => $q->withTrashed()
+                'business.users' => fn($q) => $q->withTrashed()
                     ->where('role', 'staff')
                     ->orderBy('name'),
             ])
@@ -245,14 +246,14 @@ class SuperAdminController extends ApiController
             ->where('role', 'owner');
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn ($q) => $q
+            $query->where(fn($q) => $q
                 ->where('name', 'like', "%{$search}%")
                 ->orWhere('email', 'like', "%{$search}%")
-                ->orWhereHas('business', fn ($business) => $business
+                ->orWhereHas('business', fn($business) => $business
                     ->where('name', 'like', "%{$search}%")
-                    ->orWhereHas('users', fn ($user) => $user
+                    ->orWhereHas('users', fn($user) => $user
                         ->where('role', 'staff')
-                        ->where(fn ($staff) => $staff
+                        ->where(fn($staff) => $staff
                             ->where('name', 'like', "%{$search}%")
                             ->orWhere('email', 'like', "%{$search}%")))));
         }
@@ -306,16 +307,16 @@ class SuperAdminController extends ApiController
             ->whereNotNull('business_id');
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn ($user) => $user
+            $query->where(fn($user) => $user
                 ->where('name', 'like', "%{$search}%")
                 ->orWhere('email', 'like', "%{$search}%")
                 ->orWhere('role', 'like', "%{$search}%")
-                ->orWhereHas('business', fn ($business) => $business
+                ->orWhereHas('business', fn($business) => $business
                     ->where('name', 'like', "%{$search}%")));
         }
         $paginator = $query->orderBy('name')
             ->paginate(min((int) $request->input('per_page', 20), 50));
-        $paginator->getCollection()->transform(fn (User $user) => $this->permissionUserData($user));
+        $paginator->getCollection()->transform(fn(User $user) => $this->permissionUserData($user));
 
         return $this->paginated($paginator);
     }
@@ -358,8 +359,8 @@ class SuperAdminController extends ApiController
             ->whereNotNull('business_id')
             ->where('role', $data['role'])
             ->get();
-        DB::transaction(fn () => $users->each(
-            fn (User $user) => $user->syncPermissions($permissions)
+        DB::transaction(fn() => $users->each(
+            fn(User $user) => $user->syncPermissions($permissions)
         ));
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
@@ -383,6 +384,94 @@ class SuperAdminController extends ApiController
             'user' => $user,
             'token' => $user->createToken('Super Admin impersonation')->plainTextToken,
         ], "Viewing dashboard as {$user->name}.");
+    }
+
+    // Return the private payment proof uploaded by the owner.
+    public function paymentProof(PlanTransaction $planTransaction)
+    {
+        $path = $planTransaction->payment_proof_path;
+
+        abort_unless($path, 404, 'Payment proof not found.');
+        abort_unless(
+            Storage::disk('local')->exists($path),
+            404,
+            'Payment proof file not found.'
+        );
+
+        return Storage::disk('local')->response(
+            $path,
+            basename($path)
+        );
+    }
+
+    // Approve or reject a payment submitted by the owner.
+    public function reviewPayment(
+        Request $request,
+        PlanTransaction $planTransaction
+    ) {
+        $validated = $request->validate([
+            'action' => 'required|string|in:approve,reject',
+            'rejection_reason' => 'nullable|required_if:action,reject|string|min:3|max:1000',
+        ]);
+
+        if ($planTransaction->payment_status !== 'pending_verification') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only payments pending verification can be reviewed.',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($validated, $planTransaction) {
+            if ($validated['action'] === 'approve') {
+                // Calculate the subscription period using the same logic as updateTransactionStatus.
+                $startsAt = now()->startOfDay();
+                $endsAt = $startsAt
+                    ->copy()
+                    ->addMonthsNoOverflow(
+                        max(1, (int) $planTransaction->duration_months)
+                    );
+
+                // Mark the payment as verified and complete the transaction.
+                $planTransaction->update([
+                    'payment_status' => 'paid',
+                    'status' => 'completed',
+                    'paid_at' => now(),
+                    'payment_verified_at' => now(),
+                    'payment_rejection_reason' => null,
+                    'starts_at' => $startsAt,
+                    'ends_at' => $endsAt,
+                ]);
+
+                // Activate the purchased subscription on the business.
+                $planTransaction->business()->update([
+                    'subscription_plan' => $planTransaction->plan,
+                    'subscription_status' => 'active',
+                    'plan_started_at' => $startsAt,
+                    'plan_ends_at' => $endsAt,
+                ]);
+            } else {
+                // Reject the payment and mark the transaction as failed.
+                $planTransaction->update([
+                    'payment_status' => 'rejected',
+                    'status' => 'failed',
+                    'payment_verified_at' => null,
+                    'payment_rejection_reason' => $validated['rejection_reason'],
+                ]);
+            }
+        });
+
+        $planTransaction = $planTransaction->fresh()->load([
+            'business:id,name,email',
+            'creator:id,name',
+            'selectedPaymentMethod:id,name,account_name,account_number',
+        ]);
+
+        return $this->ok(
+            $planTransaction,
+            $validated['action'] === 'approve'
+                ? 'Payment approved and subscription activated successfully.'
+                : 'Payment rejected successfully.'
+        );
     }
 
     /** Normalize the user payload used by permission search and detail endpoints. */

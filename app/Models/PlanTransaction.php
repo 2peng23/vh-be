@@ -9,15 +9,44 @@ class PlanTransaction extends Model
 {
     protected $guarded = ['id'];
 
-    /** Cast monetary and calendar values for consistent API serialization. */
+    protected $fillable = [
+        'business_id',
+        'subscription_plan_offering_id',
+        'created_by',
+        'plan',
+        'duration_months',
+        'amount',
+        'currency',
+        'payment_method_id',
+        'payment_method',
+        'reference',
+        'status',
+        'payment_status',
+        'payment_reference',
+        'payment_proof_path',
+        'payment_submitted_at',
+        'payment_verified_at',
+        'payment_rejection_reason',
+        'paid_marked_at',
+        'paid_at',
+        'starts_at',
+        'ends_at',
+        'notes',
+    ];
+
     protected function casts(): array
     {
         return [
+            'duration_months' => 'integer',
             'amount' => 'decimal:2',
+
+            'payment_submitted_at' => 'datetime',
+            'payment_verified_at' => 'datetime',
+            'paid_marked_at' => 'datetime',
+
             'paid_at' => 'date',
             'starts_at' => 'date',
             'ends_at' => 'date',
-            'paid_marked_at' => 'datetime',
         ];
     }
 
