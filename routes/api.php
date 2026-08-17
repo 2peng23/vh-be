@@ -56,6 +56,11 @@ Route::prefix('v1')->group(function () {
             Route::put('businesses/{business}', [SuperAdminController::class, 'updateBusiness']);
             Route::get('transactions', [SuperAdminController::class, 'transactions']);
             Route::post('transactions', [SuperAdminController::class, 'storeTransaction']);
+            // Return the payment proof uploaded by the owner.
+            Route::get('transactions/{planTransaction}/payment-proof', [SuperAdminController::class, 'paymentProof']);
+            // Approve or reject the owner's submitted payment.
+            Route::put('transactions/{planTransaction}/payment-review', [SuperAdminController::class, 'reviewPayment']);
+
             Route::put('transactions/{planTransaction}/status', [SuperAdminController::class, 'updateTransactionStatus']);
             Route::apiResource('plan-offerings', SubscriptionPlanOfferingController::class)->only(['index', 'store', 'update']);
             Route::apiResource('payment-methods', PaymentMethodController::class)->only(['index', 'store', 'update', 'destroy']);
@@ -87,6 +92,7 @@ Route::prefix('v1')->group(function () {
         Route::get('payment-methods', [PaymentMethodController::class, 'index']);
         Route::get('plan-transactions/{planTransaction}', [PlanTransactionController::class, 'show']);
         Route::put('plan-transactions/{planTransaction}/mark-paid', [PlanTransactionController::class, 'markAsPaid']);
+        Route::post('plan-transactions/{planTransaction}/submit-payment', [PlanTransactionController::class, 'submitPayment']);
         Route::get('plan-transactions/{planTransaction}/payment-qr', [PlanTransactionController::class, 'paymentQr']);
         Route::get('staff', [StaffController::class, 'index'])->middleware('permission:staff.view');
         Route::post('staff', [StaffController::class, 'store'])->middleware('permission:staff.create');
