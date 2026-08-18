@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Http\Requests\VehicleResource\ListVehicleResourceRequest;
+use App\Http\Requests\VehicleResource\SaveVehicleResourceRequest;
 use App\Models\Driver;
 use App\Models\FuelLog;
 use App\Models\MaintenanceSchedule;
@@ -18,96 +20,79 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class VehicleResourceController extends ApiController
 {
     private const MAP = ['documents' => VehicleDocument::class, 'expenses' => VehicleExpense::class, 'issues' => VehicleIssue::class, 'fuel' => FuelLog::class, 'schedules' => MaintenanceSchedule::class, 'drivers' => Driver::class, 'assignments' => VehicleAssignment::class];
 
-    public function index(Request $r, Vehicle $vehicle, string $resource)
+    public function index(ListVehicleResourceRequest $request, Vehicle $vehicle, string $resource)
     {
-        $this->authorizeAction($r, $resource, 'view');
-        $q = $this->class($resource)::where('vehicle_id', $vehicle->id);
+        $this->authorizeAction($request, $resource, 'view');
+        $filters = $request->validated();
+        $query = $this->class($resource)::where('vehicle_id', $vehicle->id);
         if ($resource === 'issues') {
-            $q->with(['reporter:id,name', 'assignee:id,name']);
+            $query->with(['reporter:id,name', 'assignee:id,name']);
         }
         if (in_array($resource, ['expenses', 'fuel'])) {
-            $q->with('recorder:id,name');
+            $query->with('recorder:id,name');
         }
-        foreach (['status', 'category', 'document_type', 'priority'] as $f) {
-            if ($r->filled($f)) {
-                $q->where($f, $r->$f);
+        foreach (['status', 'category', 'document_type', 'priority'] as $filterKey) {
+            if (isset($filters[$filterKey])) {
+                $query->where($filterKey, $filters[$filterKey]);
             }
         }
 
         if ($resource === 'expenses') {
-            $filters = $r->validate([
-                'record_id' => 'nullable|integer|min:1',
-                'from' => 'nullable|date',
-                'to' => 'nullable|date|after_or_equal:from',
-                'vendor' => 'nullable|string|max:150',
-                'recorded_by' => 'nullable|string|max:150',
-                'sort_by' => 'nullable|in:category,amount,expense_date,vendor,recorded_by_name',
-                'sort_direction' => 'nullable|in:asc,desc',
-            ]);
-            $q->when(isset($filters['record_id']), fn ($query) => $query->whereKey($filters['record_id']))
+            $query->when(isset($filters['record_id']), fn ($queryBuilder) => $queryBuilder->whereKey($filters['record_id']))
                 ->when(isset($filters['from']), fn ($query) => $query->whereDate('expense_date', '>=', $filters['from']))
                 ->when(isset($filters['to']), fn ($query) => $query->whereDate('expense_date', '<=', $filters['to']))
                 ->when(isset($filters['vendor']), fn ($query) => $query->where('vendor', 'like', '%'.$filters['vendor'].'%'))
                 ->when(isset($filters['recorded_by']), fn ($query) => $query->whereHas('recorder', fn ($recorder) => $recorder->where('name', 'like', '%'.$filters['recorded_by'].'%')));
 
-            $totalAmount = (float) (clone $q)->sum('amount');
+            $totalAmount = (float) (clone $query)->sum('amount');
 
             $sortBy = $filters['sort_by'] ?? 'expense_date';
             $direction = $filters['sort_direction'] ?? 'desc';
             if ($sortBy === 'recorded_by_name') {
-                $q->leftJoin('users as recorders', 'recorders.id', '=', 'vehicle_expenses.recorded_by')
+                $query->leftJoin('users as recorders', 'recorders.id', '=', 'vehicle_expenses.recorded_by')
                     ->select('vehicle_expenses.*')
                     ->orderBy('recorders.name', $direction);
             } else {
-                $q->orderBy($sortBy, $direction);
+                $query->orderBy($sortBy, $direction);
             }
 
             return $this->paginated(
-                $q->paginate(min((int) $r->input('per_page', 20), 100)),
+                $query->paginate(min((int) $request->input('per_page', 20), 100)),
                 ['total_amount' => $totalAmount],
             );
         }
 
         if ($resource === 'fuel') {
-            $filters = $r->validate([
-                'record_id' => 'nullable|integer|min:1',
-                'from' => 'nullable|date',
-                'to' => 'nullable|date|after_or_equal:from',
-                'recorded_by' => 'nullable|string|max:150',
-                'sort_by' => 'nullable|in:recorded_by_name,fuel_date,mileage,liters,price_per_liter,total_amount',
-                'sort_direction' => 'nullable|in:asc,desc',
-            ]);
-            $q->when(isset($filters['record_id']), fn ($query) => $query->whereKey($filters['record_id']))
+            $query->when(isset($filters['record_id']), fn ($queryBuilder) => $queryBuilder->whereKey($filters['record_id']))
                 ->when(isset($filters['from']), fn ($query) => $query->whereDate('fuel_date', '>=', $filters['from']))
                 ->when(isset($filters['to']), fn ($query) => $query->whereDate('fuel_date', '<=', $filters['to']))
                 ->when(isset($filters['recorded_by']), fn ($query) => $query->whereHas('recorder', fn ($recorder) => $recorder->where('name', 'like', '%'.$filters['recorded_by'].'%')));
 
-            $totalAmount = (float) (clone $q)->sum('total_amount');
+            $totalAmount = (float) (clone $query)->sum('total_amount');
 
             $sortBy = $filters['sort_by'] ?? 'fuel_date';
             $direction = $filters['sort_direction'] ?? 'desc';
             if ($sortBy === 'recorded_by_name') {
-                $q->leftJoin('users as recorders', 'recorders.id', '=', 'fuel_logs.recorded_by')
+                $query->leftJoin('users as recorders', 'recorders.id', '=', 'fuel_logs.recorded_by')
                     ->select('fuel_logs.*')
                     ->orderBy('recorders.name', $direction);
             } else {
-                $q->orderBy($sortBy, $direction);
+                $query->orderBy($sortBy, $direction);
             }
 
             return $this->paginated(
-                $q->paginate(min((int) $r->input('per_page', 20), 100)),
+                $query->paginate(min((int) $request->input('per_page', 20), 100)),
                 ['total_amount' => $totalAmount],
             );
         }
 
-        return $this->paginated($q->latest()->paginate(min((int) $r->input('per_page', 20), 100)));
+        return $this->paginated($query->latest()->paginate(min((int) $request->input('per_page', 20), 100)));
     }
 
     public function showNested(Request $request, Vehicle $vehicle, string $resource, int $id)
@@ -132,23 +117,23 @@ class VehicleResourceController extends ApiController
             ->get(['id', 'name', 'role']));
     }
 
-    public function store(Request $r, Vehicle $vehicle, string $resource)
+    public function store(SaveVehicleResourceRequest $request, Vehicle $vehicle, string $resource)
     {
-        $this->authorizeAction($r, $resource, 'create');
+        $this->authorizeAction($request, $resource, 'create');
 
-        return DB::transaction(fn () => $this->createResource($r, $resource, $vehicle));
+        return DB::transaction(fn () => $this->createResource($request, $resource, $vehicle));
     }
 
-    public function rootIndex(Request $r, string $resource)
+    public function rootIndex(ListVehicleResourceRequest $request, string $resource)
     {
-        $this->authorizeAction($r, $resource, 'view');
+        $this->authorizeAction($request, $resource, 'view');
         $query = $this->class($resource)::query();
         if ($resource === 'assignments') {
             $query->with(['vehicle:id,brand,model,plate_number,vehicle_code', 'driver:id,name,employee_number']);
         }
-        if ($resource === 'drivers' && $r->filled('search')) {
-            $search = $r->string('search')->trim()->value();
-            $query->where(fn ($driver) => $driver
+        if ($resource === 'drivers' && $request->filled('search')) {
+            $search = $request->string('search')->trim()->value();
+            $query->where(fn ($driverQuery) => $driverQuery
                 ->where('name', 'like', "%{$search}%")
                 ->orWhere('employee_number', 'like', "%{$search}%")
                 ->orWhere('email', 'like', "%{$search}%")
@@ -156,14 +141,14 @@ class VehicleResourceController extends ApiController
                 ->orWhere('license_number', 'like', "%{$search}%"));
         }
 
-        return $this->paginated($query->latest()->paginate(min((int) $r->input('per_page', 20), 100)));
+        return $this->paginated($query->latest()->paginate(min((int) $request->input('per_page', 20), 100)));
     }
 
-    public function rootStore(Request $r, string $resource)
+    public function rootStore(SaveVehicleResourceRequest $request, string $resource)
     {
-        $this->authorizeAction($r, $resource, 'create');
+        $this->authorizeAction($request, $resource, 'create');
 
-        return $this->createResource($r, $resource);
+        return $this->createResource($request, $resource);
     }
 
     public function driverFile(Request $request, Driver $driver, string $type)
@@ -176,25 +161,25 @@ class VehicleResourceController extends ApiController
         return Storage::response($path, basename($path));
     }
 
-    private function createResource(Request $r, string $resource, ?Vehicle $vehicle = null)
+    private function createResource(SaveVehicleResourceRequest $request, string $resource, ?Vehicle $vehicle = null)
     {
         $class = $this->class($resource);
-        $data = $this->validated($r, $resource);
+        $data = $request->validated();
         if ($vehicle) {
             $data['vehicle_id'] = $vehicle->id;
         }
-        if ($resource === 'documents' && $r->hasFile('file')) {
-            $data['file_path'] = $r->file('file')->store(
-                "businesses/{$r->user()->business_id}/vehicles/{$vehicle->id}/documents"
+        if ($resource === 'documents' && $request->hasFile('file')) {
+            $data['file_path'] = $request->file('file')->store(
+                "businesses/{$request->user()->business_id}/vehicles/{$vehicle->id}/documents"
             );
         }
         if ($resource === 'drivers') {
-            $data['employee_number'] = ($data['employee_number'] ?? null) ?: $this->generateEmployeeId($r);
-            if ($r->hasFile('driver_photo')) {
-                $data['profile_photo'] = $r->file('driver_photo')->store("businesses/{$r->user()->business_id}/drivers/photos");
+            $data['employee_number'] = ($data['employee_number'] ?? null) ?: $this->generateEmployeeId($request);
+            if ($request->hasFile('driver_photo')) {
+                $data['profile_photo'] = $request->file('driver_photo')->store("businesses/{$request->user()->business_id}/drivers/photos");
             }
-            if ($r->hasFile('license_photo')) {
-                $data['license_photo'] = $r->file('license_photo')->store("businesses/{$r->user()->business_id}/drivers/licenses");
+            if ($request->hasFile('license_photo')) {
+                $data['license_photo'] = $request->file('license_photo')->store("businesses/{$request->user()->business_id}/drivers/licenses");
             }
         }
         if ($resource === 'schedules' && $vehicle) {
@@ -204,13 +189,16 @@ class VehicleResourceController extends ApiController
         $columns = (new $class)->getConnection()->getSchemaBuilder()->getColumnListing((new $class)->getTable());
         foreach (['recorded_by', 'reported_by', 'assigned_by'] as $key) {
             if (in_array($key, $columns)) {
-                $data[$key] = $r->user()->id;
+                $data[$key] = $request->user()->id;
             }
-        }if ($resource === 'issues') {
+        }
+        if ($resource === 'issues') {
             $data['reported_at'] ??= now();
-        }if ($resource === 'assignments') {
+        }
+        if ($resource === 'assignments') {
             $data['assigned_at'] ??= now();
-        }if ($resource === 'fuel') {
+        }
+        if ($resource === 'fuel') {
             $data['total_amount'] = $data['liters'] * $data['price_per_liter'];
         }
 
@@ -237,41 +225,41 @@ class VehicleResourceController extends ApiController
         return $this->ok($this->class($resource)::findOrFail($id));
     }
 
-    public function update(Request $r, int $id, string $resource)
+    public function update(SaveVehicleResourceRequest $request, int $id, string $resource)
     {
-        $this->authorizeAction($r, $resource, 'update');
-        $m = $this->class($resource)::findOrFail($id);
-        $old = $m->toArray();
-        $data = $this->validated($r, $resource, true, $m);
+        $this->authorizeAction($request, $resource, 'update');
+        $model = $this->class($resource)::findOrFail($id);
+        $oldValues = $model->toArray();
+        $data = $request->validated();
         if ($resource === 'drivers') {
-            if ($r->hasFile('driver_photo')) {
-                $oldPath = $m->profile_photo;
-                $data['profile_photo'] = $r->file('driver_photo')->store("businesses/{$r->user()->business_id}/drivers/photos");
+            if ($request->hasFile('driver_photo')) {
+                $oldPath = $model->profile_photo;
+                $data['profile_photo'] = $request->file('driver_photo')->store("businesses/{$request->user()->business_id}/drivers/photos");
                 if ($oldPath) {
                     Storage::delete($oldPath);
                 }
             }
-            if ($r->hasFile('license_photo')) {
-                $oldPath = $m->license_photo;
-                $data['license_photo'] = $r->file('license_photo')->store("businesses/{$r->user()->business_id}/drivers/licenses");
+            if ($request->hasFile('license_photo')) {
+                $oldPath = $model->license_photo;
+                $data['license_photo'] = $request->file('license_photo')->store("businesses/{$request->user()->business_id}/drivers/licenses");
                 if ($oldPath) {
                     Storage::delete($oldPath);
                 }
             }
             unset($data['driver_photo'], $data['license_photo']);
         }
-        $m->update($data);
-        app(AuditService::class)->record("{$resource}.updated", $m, $old);
+        $model->update($data);
+        app(AuditService::class)->record("{$resource}.updated", $model, $oldValues);
 
-        return $this->ok($m, ucfirst($resource).' updated.');
+        return $this->ok($model, ucfirst($resource).' updated.');
     }
 
-    public function updateNested(Request $request, Vehicle $vehicle, string $resource, int $id)
+    public function updateNested(SaveVehicleResourceRequest $request, Vehicle $vehicle, string $resource, int $id)
     {
         $this->authorizeAction($request, $resource, 'update');
         $model = $this->class($resource)::where('vehicle_id', $vehicle->id)->findOrFail($id);
-        $old = $model->toArray();
-        $data = $this->validated($request, $resource, true);
+        $oldValues = $model->toArray();
+        $data = $request->validated();
 
         if ($resource === 'documents' && $request->hasFile('file')) {
             $oldPath = $model->file_path;
@@ -298,12 +286,12 @@ class VehicleResourceController extends ApiController
             ]);
         }
 
-        DB::transaction(function () use ($model, $data, $resource, $old) {
+        DB::transaction(function () use ($model, $data, $resource, $oldValues) {
             $model->update($data);
             if ($resource === 'fuel') {
                 app(ExpenseSyncService::class)->fuel($model);
             }
-            app(AuditService::class)->record("{$resource}.updated", $model, $old);
+            app(AuditService::class)->record("{$resource}.updated", $model, $oldValues);
         });
 
         return $this->ok($model->fresh(), ucfirst($resource).' updated.');
@@ -339,46 +327,16 @@ class VehicleResourceController extends ApiController
         return $this->ok(null, ucfirst($resource).' deleted.');
     }
 
-    private function class(string $r): string
+    private function class(string $resource): string
     {
-        abort_unless(isset(self::MAP[$r]), 404);
+        abort_unless(isset(self::MAP[$resource]), 404);
 
-        return self::MAP[$r];
+        return self::MAP[$resource];
     }
 
     private function authorizeAction(Request $request, string $resource, string $action): void
     {
         abort_unless($request->user()->can("{$resource}.{$action}"), 403);
-    }
-
-    private function validated(Request $r, string $t, bool $partial = false, ?object $model = null): array
-    {
-        $p = $partial ? 'sometimes' : 'required';
-        $rules = match ($t) {
-            'documents' => ['document_type' => "$p|string", 'document_number' => 'nullable|string', 'issue_date' => 'nullable|date', 'expiration_date' => 'nullable|date', 'file_path' => 'nullable|string', 'notes' => 'nullable|string', 'status' => 'nullable|string'],'expenses' => ['category' => "$p|string", 'amount' => "$p|numeric|min:0", 'expense_date' => "$p|date", 'vendor' => 'nullable|string', 'description' => 'nullable|string', 'receipt_path' => 'nullable|string'],'issues' => ['title' => "$p|string", 'description' => "$p|string", 'priority' => 'nullable|in:low,medium,high,critical', 'category' => "$p|string", 'status' => 'nullable|in:reported,for_inspection,approved,in_repair,completed,cancelled', 'mileage' => 'nullable|integer', 'assigned_to' => 'nullable|integer', 'assigned_to_name' => 'nullable|string|max:150', 'resolution_notes' => 'nullable|string', 'estimated_cost' => 'nullable|numeric', 'actual_cost' => 'nullable|numeric'],'fuel' => ['fuel_date' => "$p|date", 'mileage' => "$p|integer", 'liters' => "$p|numeric|min:0.001", 'price_per_liter' => "$p|numeric|min:0", 'fuel_type' => 'nullable|string', 'station' => 'nullable|string', 'receipt_path' => 'nullable|string', 'notes' => 'nullable|string'],'schedules' => ['maintenance_type' => "$p|string", 'interval_type' => "$p|in:mileage,date,both", 'interval_km' => 'nullable|integer', 'interval_months' => 'nullable|integer', 'last_service_mileage' => 'nullable|integer', 'last_service_date' => 'nullable|date', 'next_service_mileage' => 'nullable|integer', 'next_service_date' => 'nullable|date', 'reminder_km' => 'nullable|integer', 'reminder_days' => 'nullable|integer', 'status' => 'nullable|string'],'drivers' => ['user_id' => 'nullable|integer', 'employee_number' => 'nullable|string', 'name' => "$p|string", 'email' => 'nullable|email', 'phone' => 'nullable|string', 'license_number' => 'nullable|string', 'license_type' => 'nullable|string', 'license_expiration' => 'nullable|date', 'date_hired' => 'nullable|date', 'status' => 'nullable|string'],'assignments' => ['vehicle_id' => "$p|integer", 'driver_id' => "$p|integer", 'assigned_at' => 'nullable|date', 'returned_at' => 'nullable|date', 'status' => 'nullable|in:active,completed,cancelled', 'notes' => 'nullable|string'],default => []
-        };
-
-        if ($t === 'issues') {
-            $rules['assigned_to'] = [
-                'nullable',
-                'integer',
-                Rule::exists('users', 'id')->where('business_id', $r->user()->business_id),
-            ];
-        }
-
-        if ($t === 'documents') {
-            unset($rules['file_path']);
-            $rules['file'] = 'nullable|file|mimes:pdf,jpg,jpeg,png|max:10240';
-        }
-
-        if ($t === 'drivers') {
-            $rules['employee_number'] = ['nullable', 'string', 'max:100', Rule::unique('drivers')->where('business_id', $r->user()->business_id)->ignore($model?->id)];
-            $rules['status'] = ['nullable', Rule::in(['active', 'inactive'])];
-            $rules['driver_photo'] = 'nullable|file|mimes:jpg,jpeg,png|max:10240';
-            $rules['license_photo'] = 'nullable|file|mimes:jpg,jpeg,png|max:10240';
-        }
-
-        return $r->validate($rules);
     }
 
     private function generateEmployeeId(Request $request): string

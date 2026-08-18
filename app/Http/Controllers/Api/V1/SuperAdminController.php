@@ -2,18 +2,27 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Http\Requests\Subscription\ReviewPaymentRequest;
+use App\Http\Requests\SuperAdmin\ApplyRolePermissionsRequest;
+use App\Http\Requests\SuperAdmin\ListBusinessesRequest;
+use App\Http\Requests\SuperAdmin\ListTransactionsRequest;
+use App\Http\Requests\SuperAdmin\ListUsersRequest;
+use App\Http\Requests\SuperAdmin\StoreManualTransactionRequest;
+use App\Http\Requests\SuperAdmin\StoreOwnerRequest;
+use App\Http\Requests\SuperAdmin\UpdateBusinessRequest;
+use App\Http\Requests\SuperAdmin\UpdateUserPermissionsRequest;
+use App\Http\Requests\SuperAdmin\UpdateUserRequest;
 use App\Models\Business;
-use App\Models\PlanTransaction;
 use App\Models\PaymentMethod;
+use App\Models\PlanTransaction;
 use App\Models\User;
 use App\Models\Vehicle;
+use App\Services\Subscription\PlanTransactionService;
 use App\Support\PermissionCatalog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\Rules\Password;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
 
@@ -34,37 +43,28 @@ class SuperAdminController extends ApiController
     }
 
     /** Return a searchable page of tenant businesses and their usage totals. */
-    public function businesses(Request $request)
+    public function businesses(ListBusinessesRequest $request)
     {
         Business::syncEndedPlanStatuses();
-        $query = Business::query()->with(['users' => fn($q) => $q->where('role', 'owner')->select('id', 'business_id', 'name', 'email')])->withCount(['users', 'vehicles']);
+        $query = Business::query()->with(['users' => fn ($query) => $query->where('role', 'owner')->select('id', 'business_id', 'name', 'email')])->withCount(['users', 'vehicles']);
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn($q) => $q->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"));
+            $query->where(fn ($queryBuilder) => $queryBuilder->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"));
         }
 
         return $this->paginated($query->latest()->paginate(min((int) $request->input('per_page', 20), 100)));
     }
 
     /** Create a tenant business and its first owner in one transaction. */
-    public function storeOwner(Request $request)
+    public function storeOwner(StoreOwnerRequest $request)
     {
-        $data = $request->validate([
-            'business_name' => 'required|string|max:150',
-            'owner_name' => 'required|string|max:150',
-            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')],
-            'phone' => 'nullable|string|max:30',
-            'password' => ['required', 'confirmed', Password::defaults()],
-            'subscription_plan' => ['required', Rule::in(['trial', 'starter', 'business', 'enterprise'])],
-            'vehicle_limit_override' => 'nullable|integer|min:1|max:100000',
-            'plan_ends_at' => 'required|date|after_or_equal:today',
-        ]);
+        $data = $request->validated();
 
         [$business, $owner] = DB::transaction(function () use ($data) {
             $baseSlug = Str::slug($data['business_name']) ?: 'business';
             $slug = $baseSlug;
             while (Business::where('slug', $slug)->exists()) {
-                $slug = $baseSlug . '-' . Str::lower(Str::random(5));
+                $slug = $baseSlug.'-'.Str::lower(Str::random(5));
             }
 
             $business = Business::create([
@@ -98,38 +98,31 @@ class SuperAdminController extends ApiController
     }
 
     /** Update plan and identity fields controlled by the platform administrator. */
-    public function updateBusiness(Request $request, Business $business)
+    public function updateBusiness(UpdateBusinessRequest $request, Business $business)
     {
-        $data = $request->validate([
-            'name' => 'sometimes|required|string|max:150',
-            'email' => 'sometimes|required|email|max:255',
-            'subscription_plan' => ['sometimes', 'required', Rule::in(['trial', 'starter', 'business', 'enterprise'])],
-            'status' => ['sometimes', 'required', Rule::in(['active', 'inactive'])],
-            'plan_ends_at' => 'sometimes|nullable|date',
-            'vehicle_limit_override' => 'sometimes|nullable|integer|min:1|max:100000',
-        ]);
+        $data = $request->validated();
         if (array_key_exists('plan_ends_at', $data)) {
             $data['subscription_status'] = Business::statusForPlanEnd($data['plan_ends_at']);
         }
         $business->update($data);
         if (($data['status'] ?? null) === 'inactive') {
-            $business->users()->each(fn(User $user) => $user->tokens()->delete());
+            $business->users()->each(fn (User $user) => $user->tokens()->delete());
         }
 
         return $this->ok($business->fresh(), 'Business updated.');
     }
 
     /** Return a searchable page of recorded plan purchases and renewals. */
-    public function transactions(Request $request)
+    public function transactions(ListTransactionsRequest $request)
     {
         $query = PlanTransaction::query()->with(['business:id,name,email', 'creator:id,name', 'selectedPaymentMethod:id,name,account_name,account_number']);
 
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn($transaction) => $transaction
+            $query->where(fn ($transactionQuery) => $transactionQuery
                 ->where('reference', 'like', "%{$search}%")
                 ->orWhere('plan', 'like', "%{$search}%")
-                ->orWhereHas('business', fn($business) => $business
+                ->orWhereHas('business', fn ($businessQuery) => $businessQuery
                     ->where('name', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%")));
         }
@@ -148,9 +141,9 @@ class SuperAdminController extends ApiController
 
         if ($request->filled('payment_method')) {
             $paymentMethod = $request->string('payment_method')->trim()->value();
-            $query->where(fn($transaction) => $transaction
+            $query->where(fn ($transactionQuery) => $transactionQuery
                 ->where('payment_method', $paymentMethod)
-                ->orWhereHas('selectedPaymentMethod', fn($method) => $method->where('name', $paymentMethod)));
+                ->orWhereHas('selectedPaymentMethod', fn ($methodQuery) => $methodQuery->where('name', $paymentMethod)));
         }
 
         if ($request->filled('date_from')) {
@@ -165,18 +158,9 @@ class SuperAdminController extends ApiController
     }
 
     /** Record a plan purchase and activate the purchased period atomically. */
-    public function storeTransaction(Request $request)
+    public function storeTransaction(StoreManualTransactionRequest $request)
     {
-        $data = $request->validate([
-            'business_id' => ['required', 'integer', Rule::exists('businesses', 'id')],
-            'plan' => ['required', Rule::in(['trial', 'starter', 'business', 'enterprise'])],
-            'amount' => 'required|numeric|min:0|max:9999999999.99',
-            'payment_method_id' => ['required', 'integer', Rule::exists('payment_methods', 'id')],
-            'paid_at' => 'required|date',
-            'starts_at' => 'required|date',
-            'ends_at' => 'required|date|after_or_equal:starts_at',
-            'notes' => 'nullable|string|max:2000',
-        ]);
+        $data = $request->validated();
 
         $transaction = DB::transaction(function () use ($data, $request) {
             $business = Business::findOrFail($data['business_id']);
@@ -197,48 +181,25 @@ class SuperAdminController extends ApiController
         return $this->ok($transaction->load(['business:id,name,email', 'creator:id,name', 'selectedPaymentMethod:id,name,account_name,account_number']), 'Plan transaction created.', 201);
     }
 
-    /** Change transaction status and activate the plan only after completion. */
-    public function updateTransactionStatus(Request $request, PlanTransaction $planTransaction)
-    {
-        $data = $request->validate(['status' => ['required', Rule::in(['processing', 'completed', 'failed'])]]);
-        DB::transaction(function () use ($planTransaction, $data) {
-            if ($data['status'] === 'completed') {
-                $startsAt = now()->startOfDay();
-                $endsAt = $startsAt->copy()->addMonthsNoOverflow(max(1, (int) $planTransaction->duration_months));
-                $planTransaction->update(['status' => 'completed', 'starts_at' => $startsAt, 'ends_at' => $endsAt]);
-                $planTransaction->business()->update([
-                    'subscription_plan' => $planTransaction->plan,
-                    'subscription_status' => 'active',
-                    'plan_started_at' => $startsAt,
-                    'plan_ends_at' => $endsAt,
-                ]);
-            } else {
-                $planTransaction->update(['status' => $data['status']]);
-            }
-        });
-
-        return $this->ok($planTransaction->fresh()->load(['business:id,name,email', 'creator:id,name', 'selectedPaymentMethod:id,name,account_name,account_number']), 'Transaction status updated.');
-    }
-
     /** Generate a readable unique reference from business, date, and random code. */
     private function transactionReference(Business $business, string $paidAt): string
     {
         $prefix = Str::upper(Str::slug($business->name, '-')) ?: 'BUSINESS';
         $date = date('Ymd', strtotime($paidAt));
         do {
-            $reference = "{$prefix}-{$date}-" . Str::upper(Str::random(8));
+            $reference = "{$prefix}-{$date}-".Str::upper(Str::random(8));
         } while (PlanTransaction::where('reference', $reference)->exists());
 
         return $reference;
     }
 
     /** Return owner rows with nested staff for the grouped user table. */
-    public function users(Request $request)
+    public function users(ListUsersRequest $request)
     {
         $query = User::withTrashed()
             ->with([
                 'business:id,name,subscription_plan,subscription_status,vehicle_limit_override,plan_ends_at',
-                'business.users' => fn($q) => $q->withTrashed()
+                'business.users' => fn ($query) => $query->withTrashed()
                     ->where('role', 'staff')
                     ->orderBy('name'),
             ])
@@ -246,14 +207,14 @@ class SuperAdminController extends ApiController
             ->where('role', 'owner');
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn($q) => $q
+            $query->where(fn ($queryBuilder) => $queryBuilder
                 ->where('name', 'like', "%{$search}%")
                 ->orWhere('email', 'like', "%{$search}%")
-                ->orWhereHas('business', fn($business) => $business
+                ->orWhereHas('business', fn ($businessQuery) => $businessQuery
                     ->where('name', 'like', "%{$search}%")
-                    ->orWhereHas('users', fn($user) => $user
+                    ->orWhereHas('users', fn ($userQuery) => $userQuery
                         ->where('role', 'staff')
-                        ->where(fn($staff) => $staff
+                        ->where(fn ($staffQuery) => $staffQuery
                             ->where('name', 'like', "%{$search}%")
                             ->orWhere('email', 'like', "%{$search}%")))));
         }
@@ -265,17 +226,10 @@ class SuperAdminController extends ApiController
     }
 
     /** Update a tenant user and revoke sessions when the account is disabled. */
-    public function updateUser(Request $request, User $user)
+    public function updateUser(UpdateUserRequest $request, User $user)
     {
         abort_if($user->isSuperAdmin(), 403);
-        $data = $request->validate([
-            'name' => 'sometimes|required|string|max:150',
-            'email' => ['sometimes', 'required', 'email', Rule::unique('users')->ignore($user->id)],
-            'role' => ['sometimes', Rule::in(['owner', 'staff'])],
-            'status' => ['sometimes', Rule::in(['active', 'inactive'])],
-            'password' => ['sometimes', 'confirmed', Password::defaults()],
-            'vehicle_limit_override' => 'sometimes|nullable|integer|min:1|max:100000',
-        ]);
+        $data = $request->validated();
         $vehicleLimitOverride = $data['vehicle_limit_override'] ?? null;
         $updatesVehicleLimit = array_key_exists('vehicle_limit_override', $data);
         unset($data['vehicle_limit_override']);
@@ -307,16 +261,16 @@ class SuperAdminController extends ApiController
             ->whereNotNull('business_id');
         if ($request->filled('search')) {
             $search = $request->string('search')->trim()->value();
-            $query->where(fn($user) => $user
+            $query->where(fn ($user) => $user
                 ->where('name', 'like', "%{$search}%")
                 ->orWhere('email', 'like', "%{$search}%")
                 ->orWhere('role', 'like', "%{$search}%")
-                ->orWhereHas('business', fn($business) => $business
+                ->orWhereHas('business', fn ($business) => $business
                     ->where('name', 'like', "%{$search}%")));
         }
         $paginator = $query->orderBy('name')
             ->paginate(min((int) $request->input('per_page', 20), 50));
-        $paginator->getCollection()->transform(fn(User $user) => $this->permissionUserData($user));
+        $paginator->getCollection()->transform(fn (User $user) => $this->permissionUserData($user));
 
         return $this->paginated($paginator);
     }
@@ -330,13 +284,10 @@ class SuperAdminController extends ApiController
     }
 
     /** Replace the selected user's direct permissions. */
-    public function updateUserPermissions(Request $request, User $user)
+    public function updateUserPermissions(UpdateUserPermissionsRequest $request, User $user)
     {
         abort_if($user->isSuperAdmin() || ! $user->business_id, 403);
-        $data = $request->validate([
-            'permissions' => 'present|array',
-            'permissions.*' => ['string', Rule::in(PermissionCatalog::all())],
-        ]);
+        $data = $request->validated();
         $user->syncPermissions(Permission::whereIn('name', $data['permissions'])->get());
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
@@ -347,20 +298,16 @@ class SuperAdminController extends ApiController
     }
 
     /** Replace direct permissions for every tenant user with the selected role. */
-    public function applyPermissionsToRole(Request $request)
+    public function applyPermissionsToRole(ApplyRolePermissionsRequest $request)
     {
-        $data = $request->validate([
-            'role' => ['required', Rule::in(PermissionCatalog::TENANT_ROLES)],
-            'permissions' => 'present|array',
-            'permissions.*' => ['string', Rule::in(PermissionCatalog::all())],
-        ]);
+        $data = $request->validated();
         $permissions = Permission::whereIn('name', $data['permissions'])->get();
         $users = User::query()
             ->whereNotNull('business_id')
             ->where('role', $data['role'])
             ->get();
-        DB::transaction(fn() => $users->each(
-            fn(User $user) => $user->syncPermissions($permissions)
+        DB::transaction(fn () => $users->each(
+            fn (User $user) => $user->syncPermissions($permissions)
         ));
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
@@ -406,13 +353,11 @@ class SuperAdminController extends ApiController
 
     // Approve or reject a payment submitted by the owner.
     public function reviewPayment(
-        Request $request,
-        PlanTransaction $planTransaction
+        ReviewPaymentRequest $request,
+        PlanTransaction $planTransaction,
+        PlanTransactionService $transactions
     ) {
-        $validated = $request->validate([
-            'action' => 'required|string|in:approve,reject',
-            'rejection_reason' => 'nullable|required_if:action,reject|string|min:3|max:1000',
-        ]);
+        $validated = $request->validated();
 
         if ($planTransaction->payment_status !== 'pending_verification') {
             return response()->json([
@@ -421,44 +366,9 @@ class SuperAdminController extends ApiController
             ], 422);
         }
 
-        DB::transaction(function () use ($validated, $planTransaction) {
-            if ($validated['action'] === 'approve') {
-                // Calculate the subscription period using the same logic as updateTransactionStatus.
-                $startsAt = now()->startOfDay();
-                $endsAt = $startsAt
-                    ->copy()
-                    ->addMonthsNoOverflow(
-                        max(1, (int) $planTransaction->duration_months)
-                    );
-
-                // Mark the payment as verified and complete the transaction.
-                $planTransaction->update([
-                    'payment_status' => 'paid',
-                    'status' => 'completed',
-                    'paid_at' => now(),
-                    'payment_verified_at' => now(),
-                    'payment_rejection_reason' => null,
-                    'starts_at' => $startsAt,
-                    'ends_at' => $endsAt,
-                ]);
-
-                // Activate the purchased subscription on the business.
-                $planTransaction->business()->update([
-                    'subscription_plan' => $planTransaction->plan,
-                    'subscription_status' => 'active',
-                    'plan_started_at' => $startsAt,
-                    'plan_ends_at' => $endsAt,
-                ]);
-            } else {
-                // Reject the payment and mark the transaction as failed.
-                $planTransaction->update([
-                    'payment_status' => 'rejected',
-                    'status' => 'failed',
-                    'payment_verified_at' => null,
-                    'payment_rejection_reason' => $validated['rejection_reason'],
-                ]);
-            }
-        });
+        $planTransaction = $validated['action'] === 'approve'
+            ? $transactions->approvePayment($planTransaction)
+            : $transactions->rejectPayment($planTransaction, $validated['rejection_reason']);
 
         $planTransaction = $planTransaction->fresh()->load([
             'business:id,name,email',

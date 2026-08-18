@@ -23,7 +23,7 @@ class EnsurePlanIsActive
                 'message' => 'Your staff account is inactive. Please contact your business owner.',
             ], 403);
         }
-        if ($request->is('api/v1/support/*') || $request->is('api/v1/superadmin/support/*') || $request->is('api/v1/plan-transactions*') || $isPlanPurchaseRequest) {
+        if ($request->is('api/v1/support/*') || $request->is('api/v1/superadmin/support/*') || $request->is('api/v1/plan-transactions*') || $request->is('api/v1/subscription/preview') || $isPlanPurchaseRequest) {
             return $next($request);
         }
         if ($user?->business_id) {

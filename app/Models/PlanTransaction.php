@@ -13,8 +13,12 @@ class PlanTransaction extends Model
         'business_id',
         'subscription_plan_offering_id',
         'created_by',
+        'transaction_type',
+        'from_plan',
         'plan',
         'duration_months',
+        'original_amount',
+        'credit_amount',
         'amount',
         'currency',
         'payment_method_id',
@@ -38,6 +42,8 @@ class PlanTransaction extends Model
     {
         return [
             'duration_months' => 'integer',
+            'original_amount' => 'decimal:2',
+            'credit_amount' => 'decimal:2',
             'amount' => 'decimal:2',
 
             'payment_submitted_at' => 'datetime',

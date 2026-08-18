@@ -17,12 +17,12 @@ class Business extends Model
 
     protected static function booted(): void
     {
-        static::creating(function ($b) {
-            $b->subscription_plan ??= 'trial';
-            $b->subscription_status ??= 'active';
-            $b->status ??= 'active';
-            $b->timezone ??= 'Asia/Manila';
-            $b->currency ??= 'PHP';
+        static::creating(function (Business $business) {
+            $business->subscription_plan ??= 'trial';
+            $business->subscription_status ??= 'active';
+            $business->status ??= 'active';
+            $business->timezone ??= 'Asia/Manila';
+            $business->currency ??= 'PHP';
         });
     }
 
@@ -44,6 +44,16 @@ class Business extends Model
     public function supportMessages(): HasMany
     {
         return $this->hasMany(SupportMessage::class);
+    }
+
+    public function planTransactions(): HasMany
+    {
+        return $this->hasMany(PlanTransaction::class);
+    }
+
+    public function scheduledSubscriptionChanges(): HasMany
+    {
+        return $this->hasMany(ScheduledSubscriptionChange::class);
     }
 
     public function getSubscriptionAttribute(): array

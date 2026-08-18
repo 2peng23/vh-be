@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Http\Requests\Audit\ShowAuditDocumentFileRequest;
 use App\Models\AuditLog;
 use App\Models\VehicleDocument;
 use Illuminate\Database\Eloquent\Builder;
@@ -11,10 +12,10 @@ use Illuminate\Support\Str;
 
 class AuditLogController extends ApiController
 {
-    public function documentFile(AuditLog $auditLog, Request $request)
+    public function documentFile(AuditLog $auditLog, ShowAuditDocumentFileRequest $request)
     {
         abort_unless($auditLog->entity_type === VehicleDocument::class, 404);
-        $version = $request->validate(['version' => 'required|in:old,new'])['version'];
+        $version = $request->validated('version');
         $values = $version === 'old' ? $auditLog->old_values : $auditLog->new_values;
         $path = $values['file_path'] ?? null;
         abort_unless($path && Storage::exists($path), 404);
