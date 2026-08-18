@@ -2,27 +2,24 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Http\Requests\Support\CreateGuestConversationRequest;
+use App\Http\Requests\Support\StoreSupportMessageRequest;
+use App\Http\Requests\Support\StoreSupportTemplateRequest;
+use App\Http\Requests\Support\UpdateSupportTemplateRequest;
 use App\Models\Business;
 use App\Models\GuestSupportConversation;
 use App\Models\SupportMessage;
 use App\Models\SupportTemplate;
 use App\Services\SupportConversationService;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 class SupportController extends ApiController
 {
     public function __construct(private readonly SupportConversationService $support) {}
 
-    /** Start an unauthenticated, browser-bound support conversation. */
-    public function createGuestConversation(Request $request)
+    public function createGuestConversation(CreateGuestConversationRequest $request)
     {
-        $data = $request->validate([
-            'name' => 'required|string|max:100',
-            'email' => 'required|email|max:255',
-        ]);
-
-        return $this->ok($this->support->createGuest($data), 'Support conversation created.', 201);
+        return $this->ok($this->support->createGuest($request->validated()), 'Support conversation created.', 201);
     }
 
     /** Load a guest's latest messages after validating its private token. */
@@ -35,10 +32,10 @@ class SupportController extends ApiController
     }
 
     /** Add a guest message to the token-authorized conversation. */
-    public function guestSend(Request $request)
+    public function guestSend(StoreSupportMessageRequest $request)
     {
         $conversation = $this->guestConversation($request);
-        $data = $this->validateMessage($request);
+        $data = $request->validated();
         $attachment = $this->support->storeAttachment($request, null, $conversation->id);
         $message = SupportMessage::create([
             'guest_support_conversation_id' => $conversation->id,
@@ -60,10 +57,10 @@ class SupportController extends ApiController
     }
 
     /** Add an authenticated owner message to its business conversation. */
-    public function send(Request $request)
+    public function send(StoreSupportMessageRequest $request)
     {
         $this->ownerOnly($request);
-        $data = $this->validateMessage($request);
+        $data = $request->validated();
         $attachment = $this->support->storeAttachment($request, $request->user()->business_id);
         $message = SupportMessage::create([
             'business_id' => $request->user()->business_id,
@@ -106,26 +103,17 @@ class SupportController extends ApiController
     }
 
     /** Create a reusable Super Admin support reply. */
-    public function storeTemplate(Request $request)
+    public function storeTemplate(StoreSupportTemplateRequest $request)
     {
         $this->superAdmin($request);
-        $data = $request->validate([
-            'title' => 'required|string|max:100|unique:support_templates,title',
-            'message' => 'required|string|max:5000',
-        ]);
 
-        return $this->ok(SupportTemplate::create($data), 'Template created.', 201);
+        return $this->ok(SupportTemplate::create($request->validated()), 'Template created.', 201);
     }
 
-    /** Update an existing reusable Super Admin support reply. */
-    public function updateTemplate(Request $request, SupportTemplate $supportTemplate)
+    public function updateTemplate(UpdateSupportTemplateRequest $request, SupportTemplate $supportTemplate)
     {
         $this->superAdmin($request);
-        $data = $request->validate([
-            'title' => ['required', 'string', 'max:100', Rule::unique('support_templates', 'title')->ignore($supportTemplate->id)],
-            'message' => 'required|string|max:5000',
-        ]);
-        $supportTemplate->update($data);
+        $supportTemplate->update($request->validated());
 
         return $this->ok($supportTemplate->fresh(), 'Template updated.');
     }
@@ -140,10 +128,10 @@ class SupportController extends ApiController
     }
 
     /** Send a Super Admin reply to a business thread. */
-    public function adminSend(Request $request, Business $business)
+    public function adminSend(StoreSupportMessageRequest $request, Business $business)
     {
         $this->superAdmin($request);
-        $data = $this->validateMessage($request);
+        $data = $request->validated();
         $attachment = $this->support->storeAttachment($request, $business->id);
         $message = SupportMessage::create([
             'business_id' => $business->id,
@@ -166,10 +154,10 @@ class SupportController extends ApiController
     }
 
     /** Send a Super Admin reply to a guest thread. */
-    public function adminGuestSend(Request $request, GuestSupportConversation $guestSupportConversation)
+    public function adminGuestSend(StoreSupportMessageRequest $request, GuestSupportConversation $guestSupportConversation)
     {
         $this->superAdmin($request);
-        $data = $this->validateMessage($request);
+        $data = $request->validated();
         $attachment = $this->support->storeAttachment($request, null, $guestSupportConversation->id);
         $message = SupportMessage::create([
             'guest_support_conversation_id' => $guestSupportConversation->id,
@@ -210,15 +198,6 @@ class SupportController extends ApiController
         abort_unless($supportMessage->guest_support_conversation_id === $conversation->id, 403);
 
         return $this->support->download($supportMessage);
-    }
-
-    /** Validate text and attachment input shared by all sender types. */
-    private function validateMessage(Request $request): array
-    {
-        return $request->validate([
-            'message' => 'nullable|string|max:5000|required_without:attachment',
-            'attachment' => 'nullable|file|max:10240|extensions:jpg,jpeg,png,gif,webp,pdf,doc,docx,xls,xlsx,csv,txt',
-        ]);
     }
 
     /** Build the cursor-based message response used by each chat client. */

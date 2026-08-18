@@ -4,13 +4,17 @@ namespace App\Support;
 
 use App\Models\Business;
 use App\Models\SubscriptionPlanOffering;
+use App\Services\Subscription\SubscriptionService;
+use Carbon\CarbonInterface;
 
 final class SubscriptionPlans
 {
+    public const TRIAL_DAYS = 30;
+
     public const VEHICLE_LIMITS = [
         'trial' => 3,
-        'starter' => 5,
-        'business' => 25,
+        'starter' => 10,
+        'business' => 30,
         'enterprise' => 100,
     ];
 
@@ -23,11 +27,12 @@ final class SubscriptionPlans
 
     public static function vehicleLimit(Business $business): int
     {
-        if ($business->vehicle_limit_override !== null) {
-            return (int) $business->vehicle_limit_override;
-        }
+        return app(SubscriptionService::class)->resolveVehicleLimit($business);
+    }
 
-        return self::defaultVehicleLimit(self::tier($business));
+    public static function trialEndsAt(?CarbonInterface $startsAt = null): CarbonInterface
+    {
+        return ($startsAt ?? now())->copy()->addDays(self::TRIAL_DAYS);
     }
 
     /** Return the administrator-configured tier limit with a safe seeded fallback. */
@@ -67,6 +72,8 @@ final class SubscriptionPlans
             'vehicle_limit_reached' => $count >= $limit,
             'usage_percent' => min(100, (int) round(($count / $limit) * 100)),
             'plan_ends_at' => $business->plan_ends_at?->toISOString(),
+            'plan_started_at' => $business->plan_started_at?->toISOString(),
+            'remaining_days' => app(SubscriptionService::class)->calculateRemainingDays($business),
             'plan_ended' => $business->planHasEnded(),
         ];
     }

@@ -24,31 +24,31 @@ class DatabaseSeeder extends Seeder
         $documentTypes = ['Registration', 'Insurance'];
         $priorities = ['low', 'high', 'critical'];
 
-        for ($b = 1; $b <= 3; $b++) {
-            $business = Business::create(['name' => "Demo Vehicle $b", 'slug' => "demo-vehicle-$b", 'email' => "vehicle$b@example.com", 'plan_started_at' => now(), 'plan_ends_at' => now()->addDays(30), 'subscription_plan' => 'business']);
-            User::create(['business_id' => $business->id, 'name' => "Demo Owner $b", 'email' => "owner$b@vh.test", 'password' => Hash::make('password'), 'role' => 'owner', 'email_verified_at' => now()]);
+        for ($businessNumber = 1; $businessNumber <= 3; $businessNumber++) {
+            $business = Business::create(['name' => "Demo Vehicle $businessNumber", 'slug' => "demo-vehicle-$businessNumber", 'email' => "vehicle$businessNumber@example.com", 'plan_started_at' => now(), 'plan_ends_at' => now()->addDays(30), 'subscription_plan' => 'business']);
+            User::create(['business_id' => $business->id, 'name' => "Demo Owner $businessNumber", 'email' => "owner$businessNumber@vh.test", 'password' => Hash::make('password'), 'role' => 'owner', 'email_verified_at' => now()]);
             $staff = collect();
-            for ($s = 1; $s <= 2; $s++) {
-                $staffNumber = (($b - 1) * 2) + $s;
+            for ($staffIndex = 1; $staffIndex <= 2; $staffIndex++) {
+                $staffNumber = (($businessNumber - 1) * 2) + $staffIndex;
                 $staff->push(User::create(['business_id' => $business->id, 'name' => "Staff $staffNumber", 'email' => "staff$staffNumber@vh.test", 'password' => Hash::make('password'), 'role' => 'staff', 'email_verified_at' => now()]));
             }
-            for ($i = 1; $i <= 8; $i++) {
-                $v = Vehicle::withoutGlobalScopes()->create([
+            for ($vehicleNumber = 1; $vehicleNumber <= 8; $vehicleNumber++) {
+                $vehicle = Vehicle::withoutGlobalScopes()->create([
                     'business_id' => $business->id,
-                    'plate_number' => "FD-$b".str_pad($i, 3, '0', STR_PAD_LEFT),
-                    'vehicle_code' => "V-$i",
-                    'brand' => $brands[($b + $i) % count($brands)],
-                    'model' => $models[($b + $i) % count($models)],
-                    'year' => 2018 + (($b + $i) % 9),
-                    'vehicle_type' => $vehicleTypes[($b + $i) % count($vehicleTypes)],
-                    'current_mileage' => 10000 + (($b * 8 + $i) * 3750),
+                    'plate_number' => "FD-$businessNumber".str_pad($vehicleNumber, 3, '0', STR_PAD_LEFT),
+                    'vehicle_code' => "V-$vehicleNumber",
+                    'brand' => $brands[($businessNumber + $vehicleNumber) % count($brands)],
+                    'model' => $models[($businessNumber + $vehicleNumber) % count($models)],
+                    'year' => 2018 + (($businessNumber + $vehicleNumber) % 9),
+                    'vehicle_type' => $vehicleTypes[($businessNumber + $vehicleNumber) % count($vehicleTypes)],
+                    'current_mileage' => 10000 + (($businessNumber * 8 + $vehicleNumber) * 3750),
                     'status' => 'active',
                 ]);
-                MaintenanceSchedule::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'maintenance_type' => 'General Maintenance Schedule', 'interval_type' => 'both', 'interval_km' => 5000, 'interval_months' => 6, 'next_service_mileage' => $v->current_mileage + (($i % 4) * 1000) - 500, 'next_service_date' => now()->addDays(($i * 9) - 14)]);
-                VehicleExpense::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'category' => $expenseCategories[$i % count($expenseCategories)], 'amount' => 500 + ($i * 725.50), 'expense_date' => now()->subDays($i * 7), 'vendor' => "Demo Vendor $i", 'recorded_by' => $staff->first()->id]);
-                VehicleDocument::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'document_type' => $documentTypes[$i % count($documentTypes)], 'expiration_date' => now()->addDays(($i * 12) - 10)]);
-                if ($i % 3 === 0) {
-                    VehicleIssue::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $v->id, 'reported_by' => $staff->first()->id, 'title' => 'Demo vehicle issue', 'description' => 'Seeded issue for testing', 'priority' => $priorities[$i % count($priorities)], 'category' => 'Other', 'status' => 'reported', 'reported_at' => now()]);
+                MaintenanceSchedule::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $vehicle->id, 'maintenance_type' => 'General Maintenance Schedule', 'interval_type' => 'both', 'interval_km' => 5000, 'interval_months' => 6, 'next_service_mileage' => $vehicle->current_mileage + (($vehicleNumber % 4) * 1000) - 500, 'next_service_date' => now()->addDays(($vehicleNumber * 9) - 14)]);
+                VehicleExpense::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $vehicle->id, 'category' => $expenseCategories[$vehicleNumber % count($expenseCategories)], 'amount' => 500 + ($vehicleNumber * 725.50), 'expense_date' => now()->subDays($vehicleNumber * 7), 'vendor' => "Demo Vendor $vehicleNumber", 'recorded_by' => $staff->first()->id]);
+                VehicleDocument::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $vehicle->id, 'document_type' => $documentTypes[$vehicleNumber % count($documentTypes)], 'expiration_date' => now()->addDays(($vehicleNumber * 12) - 10)]);
+                if ($vehicleNumber % 3 === 0) {
+                    VehicleIssue::withoutGlobalScopes()->create(['business_id' => $business->id, 'vehicle_id' => $vehicle->id, 'reported_by' => $staff->first()->id, 'title' => 'Demo vehicle issue', 'description' => 'Seeded issue for testing', 'priority' => $priorities[$vehicleNumber % count($priorities)], 'category' => 'Other', 'status' => 'reported', 'reported_at' => now()]);
                 }
             }
         }

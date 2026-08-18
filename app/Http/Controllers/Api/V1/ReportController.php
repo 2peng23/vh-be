@@ -2,35 +2,28 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Http\Requests\Report\ListExpenseReportRequest;
 use App\Models\VehicleExpense;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
-use PhpOffice\PhpSpreadsheet\Style\Fill;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Color;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class ReportController extends ApiController
 {
-    public function expenses(Request $request)
+    public function expenses(ListExpenseReportRequest $request)
     {
-        $filters = $request->validate([
-            'from' => 'nullable|date',
-            'to' => 'nullable|date|after_or_equal:from',
-            'vehicle_id' => 'nullable|integer',
-            'vehicle_code' => 'nullable|string|max:100',
-            'category' => 'nullable|string',
-            'format' => 'nullable|in:json,csv,xlsx',
-            'per_page' => 'nullable|integer|in:10,20,50,100',
-        ]);
+        $filters = $request->validated();
 
         $query = $this->expenseQuery($filters);
 
         if (($filters['format'] ?? 'json') === 'xlsx') {
             abort_unless($request->user()->can('reports.export'), 403);
+
             return $this->generateXlsx($query);
         }
 
@@ -102,7 +95,7 @@ class ReportController extends ApiController
 
     private function generateXlsx(Builder $query)
     {
-        $spreadsheet = new Spreadsheet();
+        $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
 
         // Title
@@ -115,7 +108,7 @@ class ReportController extends ApiController
         $sheet->getRowDimension(1)->setRowHeight(30);
 
         // Generated date
-        $sheet->setCellValue('A2', 'Generated: ' . now()->format('F d, Y h:i A'));
+        $sheet->setCellValue('A2', 'Generated: '.now()->format('F d, Y h:i A'));
         $sheet->mergeCells('A2:F2');
         $sheet->getStyle('A2')->getFont()->setItalic(true)->setSize(10)->setColor(new Color('FF7E8C97'));
 
@@ -145,12 +138,12 @@ class ReportController extends ApiController
             $amount = $expense->amount;
             $total += $amount;
 
-            $sheet->setCellValue('A' . $dataRow, $expense->expense_date);
-            $sheet->setCellValue('B' . $dataRow, $expense->vehicle?->plate_number ?? '');
-            $sheet->setCellValue('C' . $dataRow, $expense->vehicle?->vehicle_code ?? '');
-            $sheet->setCellValue('D' . $dataRow, $expense->category ?? '');
-            $sheet->setCellValue('E' . $dataRow, $expense->vendor ?? '');
-            $sheet->setCellValue('F' . $dataRow, $amount);
+            $sheet->setCellValue('A'.$dataRow, $expense->expense_date);
+            $sheet->setCellValue('B'.$dataRow, $expense->vehicle?->plate_number ?? '');
+            $sheet->setCellValue('C'.$dataRow, $expense->vehicle?->vehicle_code ?? '');
+            $sheet->setCellValue('D'.$dataRow, $expense->category ?? '');
+            $sheet->setCellValue('E'.$dataRow, $expense->vendor ?? '');
+            $sheet->setCellValue('F'.$dataRow, $amount);
 
             // Style data row
             for ($col = 1; $col <= 6; $col++) {
@@ -176,10 +169,10 @@ class ReportController extends ApiController
         $dataRow++;
 
         // Total row
-        $sheet->setCellValue('E' . $dataRow, 'TOTAL');
-        $sheet->setCellValue('F' . $dataRow, $total);
+        $sheet->setCellValue('E'.$dataRow, 'TOTAL');
+        $sheet->setCellValue('F'.$dataRow, $total);
 
-        $totalStyle = $sheet->getStyle('E' . $dataRow . ':F' . $dataRow);
+        $totalStyle = $sheet->getStyle('E'.$dataRow.':F'.$dataRow);
         $totalStyle->getFont()->setBold(true)->setSize(12)->setColor(new Color(Color::COLOR_WHITE));
         $totalStyle->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setARGB('FF27AE60');
         $totalStyle->getAlignment()->setHorizontal(Alignment::HORIZONTAL_RIGHT)->setVertical(Alignment::VERTICAL_CENTER);
@@ -204,7 +197,7 @@ class ReportController extends ApiController
             $writer->save('php://output');
         }, $filename, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
         ]);
     }
 }

@@ -9,15 +9,18 @@ use Illuminate\Support\Facades\DB;
 
 class MaintenanceService
 {
-    public function __construct(private readonly ExpenseSyncService $expenses) {}
+    public function __construct(
+        private readonly ExpenseSyncService $expenses,
+        private readonly AuditService $auditService
+    ) {}
 
-    public function create(array $data): MaintenanceRecord
+    public function create(array $data, int $performedBy): MaintenanceRecord
     {
-        return DB::transaction(function () use ($data) {
+        return DB::transaction(function () use ($data, $performedBy) {
             $parts = $data['parts'] ?? [];
             unset($data['parts']);
-            $data['performed_by'] = auth()->id();
-            $total = ($data['labor_cost'] ?? 0) + ($data['parts_cost'] ?? 0) + ($data['other_cost'] ?? 0);
+            $data['performed_by'] = $performedBy;
+            $total = $this->totalCost($data);
             $record = MaintenanceRecord::create($data);
             $record->forceFill(['total_cost' => $total])->save();
             $this->expenses->maintenance($record);
@@ -27,8 +30,32 @@ class MaintenanceService
                 $created->forceFill(['total_cost' => $part['total_cost']])->save();
             }
             $this->completeSchedule($record);
+            $this->auditService->record('maintenance.created', $record);
 
             return $record->load('parts');
+        });
+    }
+
+    public function update(MaintenanceRecord $maintenanceRecord, array $validated): MaintenanceRecord
+    {
+        return DB::transaction(function () use ($maintenanceRecord, $validated) {
+            $oldValues = $maintenanceRecord->toArray();
+            $maintenanceRecord->fill($validated);
+            $maintenanceRecord->forceFill(['total_cost' => $this->totalCost($maintenanceRecord->toArray())])->save();
+            $this->completeSchedule($maintenanceRecord);
+            $this->expenses->maintenance($maintenanceRecord);
+            $this->auditService->record('maintenance.updated', $maintenanceRecord, $oldValues);
+
+            return $maintenanceRecord->fresh()->load('parts');
+        });
+    }
+
+    public function delete(MaintenanceRecord $maintenanceRecord): void
+    {
+        DB::transaction(function () use ($maintenanceRecord) {
+            $this->expenses->deleteForMaintenance($maintenanceRecord);
+            $maintenanceRecord->delete();
+            $this->auditService->record('maintenance.deleted', $maintenanceRecord);
         });
     }
 
@@ -56,5 +83,12 @@ class MaintenanceService
                 : null,
             'status' => 'active',
         ]);
+    }
+
+    private function totalCost(array $data): float
+    {
+        return (float) ($data['labor_cost'] ?? 0)
+            + (float) ($data['parts_cost'] ?? 0)
+            + (float) ($data['other_cost'] ?? 0);
     }
 }

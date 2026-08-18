@@ -2,53 +2,32 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Http\Requests\Subscription\PreviewSubscriptionChangeRequest;
+use App\Http\Requests\Subscription\StorePlanTransactionRequest;
+use App\Http\Requests\Subscription\SubmitPaymentRequest;
 use App\Models\PlanTransaction;
-use App\Models\PaymentMethod;
-use App\Models\SubscriptionPlanOffering;
+use App\Services\Subscription\PlanTransactionService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 class PlanTransactionController extends ApiController
 {
+    public function __construct(
+        private readonly PlanTransactionService $transactions
+    ) {}
+
     /** Create a processing transaction from an active configured offering. */
-    public function store(Request $request)
+    public function store(StorePlanTransactionRequest $request)
     {
-        $this->ownerOnly($request);
-        $data = $request->validate([
-            'subscription_plan_offering_id' => 'required|integer|exists:subscription_plan_offerings,id',
-            'payment_method_id' => 'required|integer|exists:payment_methods,id',
-        ]);
-        $offering = SubscriptionPlanOffering::whereKey($data['subscription_plan_offering_id'])->where('is_active', true)->firstOrFail();
-        $method = PaymentMethod::findOrFail($data['payment_method_id']);
-        $business = $request->user()->business;
-
-        $transaction = DB::transaction(function () use ($request, $business, $offering, $method) {
-            do {
-                $reference = (Str::upper(Str::slug($business->name)) ?: 'BUSINESS') . '-' . now()->format('Ymd') . '-' . Str::upper(Str::random(8));
-            } while (PlanTransaction::where('reference', $reference)->exists());
-
-            return PlanTransaction::create([
-                'business_id' => $business->id,
-                'subscription_plan_offering_id' => $offering->id,
-                'created_by' => $request->user()->id,
-                'plan' => $offering->plan,
-                'duration_months' => $offering->duration_months,
-                'amount' => $offering->price,
-                'currency' => 'PHP',
-                'payment_method_id' => $method->id,
-                'payment_method' => $method->name,
-                'reference' => $reference,
-                'paid_at' => now()->toDateString(),
-                'starts_at' => null,
-                'ends_at' => null,
-                'status' => 'processing',
-                'payment_status' => 'not_paid',
-            ]);
-        });
+        $transaction = $this->transactions->create($request->user(), $request->validated());
 
         return $this->ok($transaction->load('selectedPaymentMethod:id,name,account_name,account_number,qr_path'), 'Plan transaction created.', 201);
+    }
+
+    /** Preview a plan change without creating a transaction. */
+    public function preview(PreviewSubscriptionChangeRequest $request)
+    {
+        return $this->ok($this->transactions->preview($request->user(), $request->validated()));
     }
 
     /** Return plan transactions belonging only to the authenticated owner's business. */
@@ -75,82 +54,17 @@ class PlanTransactionController extends ApiController
 
     /** Let the business owner declare that payment has been sent for this transaction. */
     public function submitPayment(
-        Request $request,
+        SubmitPaymentRequest $request,
         PlanTransaction $planTransaction
     ) {
-        $validated = $request->validate([
-            'payment_reference' => [
-                'nullable',
-                'string',
-                'max:255',
-            ],
-            'proof' => [
-                'nullable',
-                'file',
-                'mimes:jpg,jpeg,png,webp,pdf',
-                'max:10240',
-            ],
-        ]);
-
-        if (
-            empty($validated['payment_reference']) &&
-            !$request->hasFile('proof')
-        ) {
-            return response()->json([
-                'message' => 'Please provide a payment reference or upload payment proof.',
-            ], 422);
-        }
-
-        if ($planTransaction->payment_status === 'paid') {
-            return response()->json([
-                'message' => 'This transaction has already been paid.',
-            ], 422);
-        }
-
-        // Important:
-        // Make sure the transaction belongs to the currently authenticated
-        // business/owner. Replace this with your actual ownership structure.
-        //
-        // Example:
-        abort_unless(
-            $planTransaction->business_id === $request->user()->business_id,
-            403
+        $transaction = $this->transactions->submitPayment(
+            $request->user(),
+            $planTransaction,
+            $request->validated(),
+            $request->file('proof')
         );
 
-        DB::transaction(function () use (
-            $request,
-            $validated,
-            $planTransaction
-        ) {
-            $proofPath = $planTransaction->payment_proof_path;
-
-            if ($request->hasFile('proof')) {
-                if ($proofPath) {
-                    Storage::disk('local')->delete($proofPath);
-                }
-
-                $proofPath = $request
-                    ->file('proof')
-                    ->store(
-                        "payment-proofs/{$planTransaction->id}",
-                        'local'
-                    );
-            }
-
-            $planTransaction->update([
-                'payment_reference' => $validated['payment_reference'] ?? null,
-                'payment_proof_path' => $proofPath,
-                'payment_status' => 'pending_verification',
-                'payment_submitted_at' => now(),
-                'payment_verified_at' => null,
-                'payment_rejection_reason' => null,
-            ]);
-        });
-
-        return response()->json([
-            'message' => 'Payment submitted successfully and is awaiting verification.',
-            'data' => $planTransaction->fresh(),
-        ]);
+        return $this->ok($transaction, 'Payment submitted successfully and is awaiting verification.');
     }
 
     /** Stream the selected payment method QR only to the transaction's business owner. */
