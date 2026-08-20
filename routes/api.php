@@ -292,6 +292,7 @@ Route::prefix('v1')->group(function () {
         // ---------------------------------------------------------------------
 
         Route::get('notifications', [NotificationController::class, 'index'])->middleware('permission:notifications.view');
+        Route::get('notifications/unread-count', [NotificationController::class, 'unreadCount'])->middleware('permission:notifications.view');
         Route::post('notifications/read-all', [NotificationController::class, 'readAll'])->middleware('permission:notifications.update');
         Route::post('notifications/{id}/read', [NotificationController::class, 'read'])->middleware('permission:notifications.update');
     });

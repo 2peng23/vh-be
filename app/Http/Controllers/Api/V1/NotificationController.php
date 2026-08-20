@@ -11,6 +11,11 @@ class NotificationController extends ApiController
         return $this->paginated($r->user()->notifications()->paginate(min((int) $r->input('per_page', 20), 100)));
     }
 
+    public function unreadCount(Request $r)
+    {
+        return $this->ok(['count' => $r->user()->unreadNotifications()->count()]);
+    }
+
     public function read(Request $r, string $id)
     {
         $n = $r->user()->notifications()->findOrFail($id);
