@@ -28,7 +28,7 @@ API response envelopes consistently return `success`, `message`, and `data`; lis
 
 See [docs/openapi.yaml](docs/openapi.yaml) for the OpenAPI entry point.
 
-The Docker image serves Laravel through Apache with `public/` as the document root. Copy `.env.docker.example` into a protected deployment secret and replace every placeholder. Do not use the local `.env.docker` values in production.
+The Docker image serves Laravel through Apache with `public/` as the document root. Use `.env.example` as the template for `.env`, keep the real `.env` protected, and replace every placeholder before production.
 
 ## Vue web application
 

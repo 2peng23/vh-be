@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Models\Business;
 use App\Models\MaintenanceSchedule;
+use App\Models\PaymentMethod;
+use App\Models\PlanTransaction;
 use App\Models\SubscriptionPlanOffering;
 use App\Models\SupportMessage;
 use App\Models\User;
@@ -180,12 +182,12 @@ class VehicleApiTest extends TestCase
         $owner = $this->user('subscription-limit');
         Sanctum::actingAs($owner);
 
-        foreach (range(1, 3) as $index) {
+        foreach (range(1, 10) as $index) {
             $this->vehicle($owner, "TRIAL-{$index}");
         }
 
         $this->postJson('/api/v1/vehicles', [
-            'plate_number' => 'TRIAL-4',
+            'plate_number' => 'TRIAL-11',
             'brand' => 'Toyota',
             'model' => 'Vios',
             'vehicle_type' => 'Car',
@@ -196,7 +198,9 @@ class VehicleApiTest extends TestCase
             'subscription_plan' => 'starter',
         ]);
 
-        foreach (range(4, 5) as $index) {
+        $owner->business->update(['vehicle_limit_override' => 12]);
+
+        foreach (range(11, 12) as $index) {
             $this->postJson('/api/v1/vehicles', [
                 'plate_number' => "STARTER-{$index}",
                 'brand' => 'Toyota',
@@ -206,7 +210,7 @@ class VehicleApiTest extends TestCase
         }
 
         $this->postJson('/api/v1/vehicles', [
-            'plate_number' => 'STARTER-6',
+            'plate_number' => 'STARTER-13',
             'brand' => 'Toyota',
             'model' => 'Vios',
             'vehicle_type' => 'Car',
@@ -214,8 +218,8 @@ class VehicleApiTest extends TestCase
 
         $this->getJson('/api/v1/me')
             ->assertOk()
-            ->assertJsonPath('data.business.subscription.vehicle_limit', 5)
-            ->assertJsonPath('data.business.subscription.vehicle_count', 5)
+            ->assertJsonPath('data.business.subscription.vehicle_limit', 12)
+            ->assertJsonPath('data.business.subscription.vehicle_count', 12)
             ->assertJsonPath('data.business.subscription.vehicle_limit_reached', true);
     }
 
@@ -742,7 +746,7 @@ class VehicleApiTest extends TestCase
         ])->assertCreated()
             ->assertJsonPath('data.owner.role', 'owner')
             ->assertJsonPath('data.business.subscription.vehicle_limit', 12)
-            ->assertJsonPath('data.business.subscription.default_vehicle_limit', 25)
+            ->assertJsonPath('data.business.subscription.default_vehicle_limit', 30)
             ->assertJsonPath('data.business.subscription.has_custom_vehicle_limit', true);
 
         $this->assertDatabaseHas('businesses', [
@@ -807,6 +811,108 @@ class VehicleApiTest extends TestCase
         $this->assertNull($lowerOverride->fresh()->vehicle_limit_override);
         $this->assertSame(10, SubscriptionPlans::vehicleLimit($inherited->fresh()));
         $this->assertSame(10, SubscriptionPlans::vehicleLimit($lowerOverride->fresh()));
+    }
+
+    public function test_super_admin_can_update_the_trial_vehicle_limit(): void
+    {
+        $superAdmin = User::create([
+            'business_id' => null,
+            'name' => 'Platform Admin',
+            'email' => 'trial-plan-admin@vehiclehub.test',
+            'password' => 'password',
+            'role' => 'super_admin',
+            'email_verified_at' => now(),
+        ]);
+        $trialBusiness = Business::create([
+            'name' => 'Trial Limit',
+            'slug' => 'trial-limit',
+            'email' => 'trial-limit@example.com',
+            'subscription_plan' => 'trial',
+        ]);
+        Sanctum::actingAs($superAdmin);
+
+        $trialOffering = $this->getJson('/api/v1/superadmin/plan-offerings')
+            ->assertOk()
+            ->assertJsonFragment([
+                'plan' => 'trial',
+                'name' => 'Free Trial',
+                'vehicle_limit' => 10,
+            ])
+            ->json('data.0');
+
+        $this->putJson("/api/v1/superadmin/plan-offerings/{$trialOffering['id']}", [
+            'plan' => 'trial',
+            'name' => 'Free Trial',
+            'duration_months' => 1,
+            'price' => 0,
+            'vehicle_limit' => 15,
+            'details' => 'Explore Vehicle Hub before choosing a paid subscription.',
+            'is_active' => true,
+        ])->assertOk()
+            ->assertJsonPath('data.vehicle_limit', 15);
+
+        $this->assertSame(15, SubscriptionPlans::defaultVehicleLimit('trial'));
+        $this->assertSame(15, SubscriptionPlans::vehicleLimit($trialBusiness->fresh()));
+    }
+
+    public function test_owner_plan_offerings_do_not_include_trial_for_purchase(): void
+    {
+        $owner = $this->user('owner-plan-offerings');
+        Sanctum::actingAs($owner);
+
+        $plans = $this->getJson('/api/v1/plan-offerings')
+            ->assertOk()
+            ->json('data');
+
+        $this->assertNotContains('trial', array_column($plans, 'plan'));
+        $this->assertContains('starter', array_column($plans, 'plan'));
+    }
+
+    public function test_unpaid_plan_transactions_expire_after_three_days(): void
+    {
+        $owner = $this->user('expired-plan-payment');
+        $method = PaymentMethod::create([
+            'name' => 'GCash',
+            'account_name' => 'Vehicle Hub',
+            'account_number' => '09170000000',
+        ]);
+        $transaction = PlanTransaction::create([
+            'business_id' => $owner->business_id,
+            'created_by' => $owner->id,
+            'transaction_type' => 'purchase',
+            'from_plan' => 'trial',
+            'plan' => 'business',
+            'duration_months' => 1,
+            'original_amount' => 2999,
+            'credit_amount' => 0,
+            'amount' => 2999,
+            'currency' => 'PHP',
+            'payment_method_id' => $method->id,
+            'payment_method' => $method->name,
+            'reference' => 'EXPIRED-PLAN-PAYMENT',
+            'paid_at' => null,
+            'starts_at' => now()->toDateString(),
+            'ends_at' => now()->addMonth()->toDateString(),
+            'status' => 'processing',
+            'payment_status' => 'not_paid',
+        ]);
+        $transaction->forceFill([
+            'created_at' => now()->subDays(3),
+            'updated_at' => now()->subDays(3),
+        ])->save();
+        Sanctum::actingAs($owner);
+
+        $this->getJson('/api/v1/plan-transactions')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $transaction->id)
+            ->assertJsonPath('data.0.payment_status', 'expired')
+            ->assertJsonPath('data.0.status', 'expired');
+
+        $this->assertDatabaseHas('plan_transactions', [
+            'id' => $transaction->id,
+            'payment_status' => 'expired',
+            'status' => 'expired',
+        ]);
     }
 
     public function test_business_status_is_derived_from_the_plan_end_date(): void

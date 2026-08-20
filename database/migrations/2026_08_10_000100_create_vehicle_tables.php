@@ -37,6 +37,8 @@ return new class extends Migration
             $t->timestamps();
             $t->unique(['business_id', 'plate_number']);
             $t->index(['business_id', 'brand', 'model']);
+            $t->index(['business_id', 'status']);
+            $t->index(['business_id', 'created_at']);
         });
         Schema::create('drivers', function (Blueprint $t) {
             $t->id();
@@ -52,8 +54,13 @@ return new class extends Migration
             $t->date('date_hired')->nullable();
             $t->string('status')->default('active');
             $t->string('profile_photo')->nullable();
+            $t->string('license_photo')->nullable();
             $t->softDeletes();
             $t->timestamps();
+            $t->unique(['business_id', 'employee_number']);
+            $t->index(['business_id', 'status']);
+            $t->index(['business_id', 'license_expiration']);
+            $t->index(['business_id', 'created_at']);
         });
         Schema::create('vehicle_assignments', function (Blueprint $t) {
             $t->id();
@@ -66,6 +73,8 @@ return new class extends Migration
             $t->string('status')->default('active')->index();
             $t->text('notes')->nullable();
             $t->timestamps();
+            $t->index(['business_id', 'status']);
+            $t->index(['business_id', 'vehicle_id', 'status']);
         });
         Schema::create('mileage_logs', function (Blueprint $t) {
             $t->id();
@@ -79,6 +88,7 @@ return new class extends Migration
             $t->boolean('is_override')->default(false);
             $t->timestamps();
             $t->index(['business_id', 'vehicle_id', 'recorded_at']);
+            $t->index(['vehicle_id', 'recorded_at']);
         });
         Schema::create('maintenance_schedules', function (Blueprint $t) {
             $t->id();
@@ -96,6 +106,9 @@ return new class extends Migration
             $t->unsignedInteger('reminder_days')->default(30);
             $t->string('status')->default('active');
             $t->timestamps();
+            $t->index(['business_id', 'next_service_date']);
+            $t->index(['business_id', 'next_service_mileage']);
+            $t->index(['business_id', 'status']);
         });
         Schema::create('maintenance_records', function (Blueprint $t) {
             $t->id();
@@ -117,6 +130,8 @@ return new class extends Migration
             $t->softDeletes();
             $t->timestamps();
             $t->index(['business_id', 'service_date']);
+            $t->index(['vehicle_id', 'service_date']);
+            $t->index(['business_id', 'maintenance_type']);
         });
         Schema::create('maintenance_parts', function (Blueprint $t) {
             $t->id();
@@ -143,6 +158,9 @@ return new class extends Migration
             $t->string('status')->default('active');
             $t->softDeletes();
             $t->timestamps();
+            $t->index(['business_id', 'expiration_date']);
+            $t->index(['business_id', 'document_type']);
+            $t->index(['vehicle_id', 'expiration_date']);
         });
         Schema::create('vehicle_expenses', function (Blueprint $t) {
             $t->id();
@@ -156,9 +174,14 @@ return new class extends Migration
             $t->string('receipt_path')->nullable();
             $t->foreignId('recorded_by')->constrained('users');
             $t->foreignId('maintenance_record_id')->nullable()->constrained()->nullOnDelete();
+            $t->foreignId('fuel_log_id')->nullable();
+            $t->boolean('is_generated')->default(false);
             $t->softDeletes();
             $t->timestamps();
+            $t->unique('fuel_log_id');
             $t->index(['business_id', 'expense_date']);
+            $t->index(['business_id', 'category', 'expense_date']);
+            $t->index(['vehicle_id', 'expense_date']);
         });
         Schema::create('fuel_logs', function (Blueprint $t) {
             $t->id();
@@ -175,6 +198,11 @@ return new class extends Migration
             $t->string('receipt_path')->nullable();
             $t->text('notes')->nullable();
             $t->timestamps();
+            $t->index(['business_id', 'fuel_date']);
+            $t->index(['vehicle_id', 'fuel_date']);
+        });
+        Schema::table('vehicle_expenses', function (Blueprint $t) {
+            $t->foreign('fuel_log_id')->references('id')->on('fuel_logs')->nullOnDelete();
         });
         Schema::create('vehicle_issues', function (Blueprint $t) {
             $t->id();
@@ -182,6 +210,7 @@ return new class extends Migration
             $t->foreignId('vehicle_id')->constrained()->cascadeOnDelete();
             $t->foreignId('reported_by')->constrained('users');
             $t->foreignId('assigned_to')->nullable()->constrained('users')->nullOnDelete();
+            $t->string('assigned_to_name', 150)->nullable();
             $t->string('title');
             $t->text('description');
             $t->string('priority')->default('medium')->index();
@@ -194,6 +223,10 @@ return new class extends Migration
             $t->decimal('estimated_cost', 14, 2)->nullable();
             $t->decimal('actual_cost', 14, 2)->nullable();
             $t->timestamps();
+            $t->index(['business_id', 'status']);
+            $t->index(['business_id', 'priority']);
+            $t->index(['business_id', 'reported_at']);
+            $t->index(['vehicle_id', 'reported_at']);
         });
         Schema::create('vehicle_photos', function (Blueprint $t) {
             $t->id();
@@ -266,6 +299,8 @@ return new class extends Migration
             $t->text('user_agent')->nullable();
             $t->timestamp('created_at')->useCurrent();
             $t->index(['business_id', 'entity_type', 'entity_id']);
+            $t->index(['business_id', 'created_at']);
+            $t->index(['business_id', 'action', 'created_at']);
         });
         Schema::create('reminder_deliveries', function (Blueprint $t) {
             $t->id();
@@ -276,6 +311,7 @@ return new class extends Migration
             $t->string('threshold', 30);
             $t->timestamp('sent_at');
             $t->unique(['business_id', 'remindable_type', 'remindable_id', 'kind', 'threshold'], 'reminder_once');
+            $t->index(['business_id', 'sent_at']);
         });
         Schema::create('notifications', function (Blueprint $t) {
             $t->uuid('id')->primary();

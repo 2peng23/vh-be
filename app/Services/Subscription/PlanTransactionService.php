@@ -13,12 +13,28 @@ use Illuminate\Validation\ValidationException;
 
 class PlanTransactionService
 {
+    private const PAYMENT_EXPIRY_DAYS = 3;
+
     public function __construct(
         private readonly SubscriptionService $subscriptions
     ) {}
 
+    public function expireOldUnpaidTransactions(): int
+    {
+        return PlanTransaction::query()
+            ->where('payment_status', 'not_paid')
+            ->where('status', 'processing')
+            ->whereDate('created_at', '<=', now()->subDays(self::PAYMENT_EXPIRY_DAYS)->toDateString())
+            ->update([
+                'payment_status' => 'expired',
+                'status' => 'expired',
+            ]);
+    }
+
     public function create(User $user, array $data): PlanTransaction
     {
+        $this->expireOldUnpaidTransactions();
+
         $offering = SubscriptionPlanOffering::whereKey($data['subscription_plan_offering_id'])
             ->where('is_active', true)
             ->firstOrFail();
@@ -48,10 +64,18 @@ class PlanTransactionService
         ?UploadedFile $proof
     ): PlanTransaction {
         $this->authorizeOwnerTransaction($user, $transaction);
+        $this->expireOldUnpaidTransactions();
+        $transaction->refresh();
 
         if ($transaction->payment_status === 'paid') {
             throw ValidationException::withMessages([
                 'transaction' => 'This transaction has already been paid.',
+            ]);
+        }
+
+        if ($transaction->payment_status === 'expired') {
+            throw ValidationException::withMessages([
+                'transaction' => 'This payment request has expired. Please create a new plan transaction.',
             ]);
         }
 

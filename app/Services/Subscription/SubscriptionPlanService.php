@@ -12,12 +12,15 @@ class SubscriptionPlanService
 {
     public function listForUser($user): Collection
     {
+        $this->ensureTrialOffering();
+
         $query = SubscriptionPlanOffering::query()
-            ->orderBy('plan')
+            ->orderByRaw("CASE plan WHEN 'trial' THEN 0 WHEN 'starter' THEN 1 WHEN 'business' THEN 2 WHEN 'enterprise' THEN 3 ELSE 99 END")
             ->orderBy('duration_months');
 
         if ($user->role->value !== 'super_admin') {
-            $query->where('is_active', true);
+            $query->where('is_active', true)
+                ->where('plan', '!=', 'trial');
         }
 
         return $query->get();
@@ -46,6 +49,8 @@ class SubscriptionPlanService
     /** Return active plan offerings that are safe for unauthenticated visitors. */
     public function getPublicActiveOfferings(): Collection
     {
+        $this->ensureTrialOffering();
+
         $offerings = SubscriptionPlanOffering::query()
             ->where('is_active', true)
             ->get([
@@ -64,29 +69,33 @@ class SubscriptionPlanService
             ))
             ->values();
 
-        if (! $offerings->contains('plan', 'trial')) {
-            $offerings->prepend((object) [
-                'id' => 0,
-                'plan' => 'trial',
-                'name' => 'Free Trial',
-                'duration_months' => 1,
-                'duration_days' => SubscriptionPlans::TRIAL_DAYS,
-                'price' => '0.00',
-                'vehicle_limit' => SubscriptionPlans::defaultVehicleLimit('trial'),
-                'details' => 'Explore Vehicle Hub before choosing a paid subscription.',
-            ]);
-        }
-
         return $offerings->values()->map(fn ($offering) => [
             'id' => (int) $offering->id,
             'plan' => (string) $offering->plan,
             'name' => (string) $offering->name,
             'duration_months' => (int) $offering->duration_months,
-            'duration_days' => property_exists($offering, 'duration_days') ? (int) $offering->duration_days : null,
+            'duration_days' => $offering->plan === 'trial' ? SubscriptionPlans::TRIAL_DAYS : null,
             'price' => (string) $offering->price,
             'vehicle_limit' => (int) $offering->vehicle_limit,
             'details' => $offering->details,
         ]);
+    }
+
+    private function ensureTrialOffering(): void
+    {
+        SubscriptionPlanOffering::query()->firstOrCreate(
+            [
+                'plan' => 'trial',
+                'duration_months' => 1,
+            ],
+            [
+                'name' => 'Free Trial',
+                'price' => 0,
+                'vehicle_limit' => SubscriptionPlans::VEHICLE_LIMITS['trial'],
+                'details' => 'Explore Vehicle Hub before choosing a paid subscription.',
+                'is_active' => true,
+            ],
+        );
     }
 
     private function synchronizeVehicleLimit(string $plan, int $vehicleLimit): void
