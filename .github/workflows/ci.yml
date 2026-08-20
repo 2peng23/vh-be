@@ -71,7 +71,12 @@ jobs:
       - name: Create backend environment file
         env:
           BACKEND_ENV_FILE: ${{ secrets.BACKEND_ENV_FILE }}
-        run: printf '%s\n' "$BACKEND_ENV_FILE" > .env.docker
+        run: |
+          if [ -z "$BACKEND_ENV_FILE" ]; then
+            echo "BACKEND_ENV_FILE secret is empty. Add the full backend .env content to the repository secret."
+            exit 1
+          fi
+          printf '%s\n' "$BACKEND_ENV_FILE" > .env
 
       - name: Build backend images
         run: docker compose build
