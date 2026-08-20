@@ -113,8 +113,10 @@ class SuperAdminController extends ApiController
     }
 
     /** Return a searchable page of recorded plan purchases and renewals. */
-    public function transactions(ListTransactionsRequest $request)
+    public function transactions(ListTransactionsRequest $request, PlanTransactionService $transactions)
     {
+        $transactions->expireOldUnpaidTransactions();
+
         $query = PlanTransaction::query()->with(['business:id,name,email', 'creator:id,name', 'selectedPaymentMethod:id,name,account_name,account_number']);
 
         if ($request->filled('search')) {

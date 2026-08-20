@@ -34,6 +34,8 @@ class PlanTransactionController extends ApiController
     public function index(Request $request)
     {
         $this->ownerOnly($request);
+        $this->transactions->expireOldUnpaidTransactions();
+
         $query = PlanTransaction::query()
             ->with('selectedPaymentMethod:id,name,account_name,account_number,qr_path')
             ->where('business_id', $request->user()->business_id)
@@ -47,6 +49,8 @@ class PlanTransactionController extends ApiController
     public function show(Request $request, PlanTransaction $planTransaction)
     {
         $this->ownerOnly($request);
+        $this->transactions->expireOldUnpaidTransactions();
+
         abort_unless($planTransaction->business_id === $request->user()->business_id, 404);
 
         return $this->ok($planTransaction->load('selectedPaymentMethod:id,name,account_name,account_number,qr_path'));

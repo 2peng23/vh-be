@@ -12,7 +12,7 @@ final class SubscriptionPlans
     public const TRIAL_DAYS = 30;
 
     public const VEHICLE_LIMITS = [
-        'trial' => 3,
+        'trial' => 10,
         'starter' => 10,
         'business' => 30,
         'enterprise' => 100,
@@ -38,10 +38,6 @@ final class SubscriptionPlans
     /** Return the administrator-configured tier limit with a safe seeded fallback. */
     public static function defaultVehicleLimit(string $tier): int
     {
-        if ($tier === 'trial') {
-            return self::VEHICLE_LIMITS['trial'];
-        }
-
         $configuredLimit = SubscriptionPlanOffering::query()
             ->where('plan', $tier)
             ->orderBy('duration_months')

@@ -22,19 +22,23 @@ return new class extends Migration
             $t->string('mileage_unit')->default('km');
             $t->string('subscription_plan')->default('trial');
             $t->string('subscription_status')->default('active');
+            $t->string('status', 20)->default('active')->index();
+            $t->unsignedInteger('vehicle_limit_override')->nullable();
             $t->timestamp('plan_started_at')->nullable();
             $t->timestamp('plan_ends_at')->nullable();
             $t->json('settings')->nullable();
             $t->timestamps();
+            $t->index(['subscription_status', 'plan_ends_at']);
+            $t->index(['subscription_plan', 'subscription_status']);
         });
         Schema::create('users', function (Blueprint $t) {
             $t->id();
-            $t->foreignId('business_id')->constrained()->cascadeOnDelete();
+            $t->foreignId('business_id')->nullable()->constrained()->cascadeOnDelete();
             $t->string('name');
             $t->string('email')->unique();
             $t->string('phone')->nullable();
             $t->string('password');
-            $t->string('role')->default('driver')->index();
+            $t->string('role')->default('staff')->index();
             $t->string('status')->default('active');
             $t->string('profile_photo')->nullable();
             $t->timestamp('email_verified_at')->nullable();
@@ -42,6 +46,8 @@ return new class extends Migration
             $t->softDeletes();
             $t->timestamps();
             $t->index(['business_id', 'email']);
+            $t->index(['business_id', 'role']);
+            $t->index(['business_id', 'status']);
         });
         Schema::create('password_reset_tokens', function (Blueprint $t) {
             $t->string('email')->primary();
