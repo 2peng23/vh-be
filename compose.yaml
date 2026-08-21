@@ -7,7 +7,7 @@ services:
     env_file:
       - .env
     ports:
-      - "${BACKEND_PORT:-8000}:80"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:80"
     volumes:
       - backend_storage:/var/www/html/storage
     depends_on:
@@ -55,7 +55,7 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD:-local-password}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-local-root-password}
     ports:
-      - "${DB_FORWARD_PORT:-3307}:3306"
+      - "127.0.0.1:${DB_FORWARD_PORT:-3307}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
