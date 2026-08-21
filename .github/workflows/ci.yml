@@ -59,7 +59,7 @@ jobs:
     name: Deploy to VPS
     needs: test-build-publish
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, vehicle-hub-be-vps]
+    runs-on: [self-hosted, vehiclehub-be-vps]
 
     steps:
       - name: Check out repository
