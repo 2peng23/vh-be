@@ -55,16 +55,13 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/vehicle-hub-be:latest
             ghcr.io/${{ github.repository_owner }}/vehicle-hub-be:${{ github.sha }}
 
-  deploy-local:
-    name: Deploy to local Docker
+  deploy-vps:
+    name: Deploy to VPS
     needs: test-build-publish
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, vehicle-hub-be]
+    runs-on: [self-hosted, vehicle-hub-be-vps]
 
     steps:
-      - name: Add Docker Desktop to PATH
-        run: echo "/Applications/Docker.app/Contents/Resources/bin" >> "$GITHUB_PATH"
-
       - name: Check out repository
         uses: actions/checkout@v4
 
@@ -89,6 +86,9 @@ jobs:
 
       - name: Start backend services
         run: docker compose up -d --remove-orphans
+
+      - name: Optimize Laravel
+        run: docker compose exec -T backend php artisan optimize
 
       - name: Show container status
         run: docker compose ps
