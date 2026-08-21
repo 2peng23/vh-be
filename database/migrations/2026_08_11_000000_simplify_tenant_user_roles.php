@@ -7,7 +7,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        $legacyRoles = ['fleet_admin', 'mechanic', 'driver'];
+        $legacyRoles = ['vehicle_admin', 'mechanic', 'driver'];
         $userIds = DB::table('users')->whereIn('role', $legacyRoles)->pluck('id');
 
         DB::table('users')->whereIn('role', $legacyRoles)->update(['role' => 'staff']);

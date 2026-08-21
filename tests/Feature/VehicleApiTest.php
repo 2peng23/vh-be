@@ -509,8 +509,8 @@ class VehicleApiTest extends TestCase
     public function test_driver_employee_id_is_generated_and_profile_file_is_private(): void
     {
         Storage::fake();
-        $owner = $this->user('acme-fleet');
-        $owner->business->update(['name' => 'Acme Fleet']);
+        $owner = $this->user('acme-vehicle');
+        $owner->business->update(['name' => 'Acme Vehicle']);
         Sanctum::actingAs($owner);
 
         $response = $this->post('/api/v1/drivers', [
@@ -521,7 +521,7 @@ class VehicleApiTest extends TestCase
         ])->assertCreated();
 
         $employeeId = $response->json('data.employee_number');
-        $this->assertMatchesRegularExpression('/^ACMEFLEET-[A-Z0-9]{6}$/', $employeeId);
+        $this->assertMatchesRegularExpression('/^ACMEVEHICLE-[A-Z0-9]{6}$/', $employeeId);
         $path = $response->json('data.profile_photo');
         $licensePath = $response->json('data.license_photo');
         Storage::assertExists($path);
@@ -733,7 +733,7 @@ class VehicleApiTest extends TestCase
         Sanctum::actingAs($superAdmin);
 
         $this->postJson('/api/v1/superadmin/owners', [
-            'business_name' => 'North Fleet',
+            'business_name' => 'North Vehicle',
             'owner_name' => 'North Owner',
             'email' => 'owner@north.test',
             'phone' => '09170000000',
@@ -750,7 +750,7 @@ class VehicleApiTest extends TestCase
             ->assertJsonPath('data.business.subscription.has_custom_vehicle_limit', true);
 
         $this->assertDatabaseHas('businesses', [
-            'name' => 'North Fleet',
+            'name' => 'North Vehicle',
             'subscription_plan' => 'business',
             'subscription_status' => 'active',
             'vehicle_limit_override' => 12,
@@ -800,7 +800,7 @@ class VehicleApiTest extends TestCase
             'duration_months' => 1,
             'price' => 1500,
             'vehicle_limit' => 10,
-            'details' => 'Complete vehicle management for small fleets.',
+            'details' => 'Complete vehicle management for small vehicles.',
             'is_active' => true,
         ])->assertOk()
             ->assertJsonPath('data.vehicle_limit', 10);

@@ -113,7 +113,7 @@ class DatabaseSeeder extends Seeder
                     'acquisition_date' => now()->subMonths(20 + $vehicleNumber)->toDateString(),
                     'acquisition_cost' => 180000 + ($vehicleNumber * 20000) + ($businessNumber * 15000),
                     'status' => $vehicleNumber === 6 ? 'maintenance' : 'active',
-                    'notes' => 'Seeded fleet unit for demo workflows.',
+                    'notes' => 'Seeded vehicle unit for demo workflows.',
                 ]);
 
                 VehicleAssignment::withoutGlobalScopes()->create([
@@ -124,7 +124,7 @@ class DatabaseSeeder extends Seeder
                     'assigned_at' => now()->subDays(45 + $vehicleNumber),
                     'returned_at' => $vehicleNumber === 8 ? now()->subDays(5) : null,
                     'status' => $vehicleNumber === 8 ? 'returned' : 'active',
-                    'notes' => $vehicleNumber === 8 ? 'Returned for reassignment after route rotation.' : 'Assigned to daily fleet operations.',
+                    'notes' => $vehicleNumber === 8 ? 'Returned for reassignment after route rotation.' : 'Assigned to daily vehicle operations.',
                 ]);
 
                 for ($logIndex = 4; $logIndex >= 0; $logIndex--) {
@@ -170,7 +170,7 @@ class DatabaseSeeder extends Seeder
                         'vehicle_id' => $vehicle->id,
                         'maintenance_schedule_id' => $schedule->id,
                         'performed_by' => $staffUser->id,
-                        'service_provider' => $scheduleIndex === 0 ? 'North Fleet Service Center' : 'RoadReady Auto Care',
+                        'service_provider' => $scheduleIndex === 0 ? 'North Vehicle Service Center' : 'RoadReady Auto Care',
                         'service_date' => now()->subDays(42 - ($scheduleIndex * 16) + $vehicleNumber)->toDateString(),
                         'mileage' => $currentMileage - (2200 - ($scheduleIndex * 700)),
                         'maintenance_type' => $schedule->maintenance_type,
@@ -196,7 +196,7 @@ class DatabaseSeeder extends Seeder
                             'part_number' => 'PART-'.$vehicleNumber.'-'.$scheduleIndex.'-'.$partIndex,
                             'quantity' => $part['quantity'],
                             'unit_cost' => $part['unit'],
-                            'supplier' => 'Fleet Parts PH',
+                            'supplier' => 'Vehicle Parts PH',
                         ]);
                         $maintenancePart->forceFill(['total_cost' => $part['quantity'] * $part['unit']])->save();
                     }
