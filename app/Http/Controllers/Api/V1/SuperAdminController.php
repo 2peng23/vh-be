@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Requests\Subscription\ReviewPaymentRequest;
 use App\Http\Requests\SuperAdmin\ApplyRolePermissionsRequest;
+use App\Http\Requests\SuperAdmin\ImportLogisticsLeadsRequest;
 use App\Http\Requests\SuperAdmin\ListBusinessesRequest;
 use App\Http\Requests\SuperAdmin\ListTransactionsRequest;
 use App\Http\Requests\SuperAdmin\ListUsersRequest;
@@ -13,6 +14,7 @@ use App\Http\Requests\SuperAdmin\UpdateBusinessRequest;
 use App\Http\Requests\SuperAdmin\UpdateUserPermissionsRequest;
 use App\Http\Requests\SuperAdmin\UpdateUserRequest;
 use App\Models\Business;
+use App\Models\LogisticsLead;
 use App\Models\PaymentMethod;
 use App\Models\PlanTransaction;
 use App\Models\User;
@@ -40,6 +42,43 @@ class SuperAdminController extends ApiController
             'users' => User::whereNotNull('business_id')->count(),
             'vehicles' => Vehicle::withoutGlobalScopes()->count(),
         ]);
+    }
+
+    /** Return saved logistics leads for the Super Admin workspace. */
+    public function logistics(Request $request)
+    {
+        $query = LogisticsLead::query();
+        if ($request->filled('search')) {
+            $search = $request->string('search')->trim()->value();
+            $query->where(fn ($leadQuery) => $leadQuery
+                ->where('name', 'like', "%{$search}%")
+                ->orWhere('email', 'like', "%{$search}%")
+                ->orWhere('phone', 'like', "%{$search}%"));
+        }
+
+        return $this->paginated($query->latest()->paginate(min((int) $request->input('per_page', 50), 100)));
+    }
+
+    /** Save logistics leads parsed from an uploaded file in the frontend. */
+    public function importLogistics(ImportLogisticsLeadsRequest $request)
+    {
+        $data = $request->validated();
+        $saved = collect($data['rows'])
+            ->map(fn ($row) => LogisticsLead::updateOrCreate(
+                ['name' => trim($row['name'])],
+                [
+                    'email' => $row['email'] ?? null,
+                    'phone' => $row['phone'] ?? null,
+                    'source_file' => $row['source_file'] ?? $data['source_file'] ?? null,
+                    'created_by' => $request->user()->id,
+                ],
+            ))
+            ->values();
+
+        return $this->ok([
+            'saved' => $saved->count(),
+            'rows' => $saved,
+        ], "{$saved->count()} logistics records saved.", 201);
     }
 
     /** Return a searchable page of tenant businesses and their usage totals. */

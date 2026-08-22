@@ -91,6 +91,8 @@ Route::prefix('v1')->group(function () {
 
         // Dashboard
         Route::get('dashboard', [SuperAdminController::class, 'dashboard']);
+        Route::get('logistics', [SuperAdminController::class, 'logistics']);
+        Route::post('logistics/import', [SuperAdminController::class, 'importLogistics']);
 
         // Businesses
         Route::get('businesses', [SuperAdminController::class, 'businesses']);
